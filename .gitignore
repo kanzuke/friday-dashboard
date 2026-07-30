@@ -26,6 +26,7 @@ npm-debug.log*
 
 # Backup files (local dev artifacts)
 *.bak
+*.bak.*
 *.bak-*
 backup-*/
 
