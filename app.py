@@ -125,7 +125,24 @@ class VoiceConfig(BaseModel):
 class AdventureLogLocation(BaseModel):
     name: str
     location: str
+    latitude: Optional[str] = None
+    longitude: Optional[str] = None
     is_public: bool = False
+
+
+class AdventureLogAddRequest(BaseModel):
+    """Request to add an activity location to AdventureLog.
+
+    The frontend sends the proposition ID and the activity index (matching
+    the position in the normalized 'activites' array shown in the dashboard).
+    The backend loads the RAW proposition JSON to extract the proper place
+    name and address (from the 'position' field in programme-based schemas),
+    geocodes the address via Nominatim (cached), then POSTs to AdventureLog
+    with latitude/longitude.
+    """
+    prop_id: str
+    activity_index: int
+    activity_name: str  # fallback name if extraction fails
 
 
 # --- Auth ---
@@ -2262,6 +2279,348 @@ async def api_voice_sample(voice_id: str, _=Depends(check_auth)):
 # --- Routes: AdventureLog ---
 
 
+def _extract_place_info_for_adventurelog(prop_id: str, activity_index: int,
+                                          activity_name: str) -> dict:
+    """Extract a clean place name and address for an AdventureLog location.
+
+    Loads the RAW proposition JSON (before normalization) to access fields
+    that normalization discards (e.g., 'position' in programme-based schemas).
+
+    Returns:
+        {"name": str, "address": str}
+            - name: clean place name (e.g., "Temescal Gateway Park")
+            - address: physical address or location query for geocoding
+
+    The activity_index corresponds to the position in the normalized
+    'activites' array as displayed in the dashboard. We replay the same
+    normalization logic to map the index back to the raw entry.
+    """
+    raw = _load_proposition_by_id(prop_id, raw=True)
+    if not raw:
+        return {"name": activity_name, "address": activity_name}
+
+    destination = _get_display_destination(raw)
+
+    # --- Schema: Santa Monica — top-level 'programme' with 'position' ---
+    if "programme" in raw and isinstance(raw["programme"], list):
+        prog = raw["programme"]
+        # Build the same activites list as normalize_proposition does
+        normalized_acts = []
+        for entry in prog:
+            if isinstance(entry, dict):
+                act_text = entry.get("activite", entry.get("nom", ""))
+                if act_text:
+                    heure = entry.get("heure", "")
+                    if heure:
+                        normalized_acts.append(f"[{heure}] {act_text}")
+                    else:
+                        normalized_acts.append(act_text)
+        # Find the matching entry by index
+        if 0 <= activity_index < len(normalized_acts):
+            # Find the raw entry at the same position
+            raw_idx = 0
+            for i, entry in enumerate(prog):
+                if isinstance(entry, dict):
+                    act_text = entry.get("activite", entry.get("nom", ""))
+                    if act_text:
+                        if raw_idx == activity_index:
+                            position = entry.get("position", "")
+                            # Clean the name: strip time prefix, activity prefixes
+                            clean_name = _clean_place_name(act_text)
+                            address = position or clean_name
+                            if not position and destination:
+                                address = f"{clean_name}, {destination}"
+                            return {"name": clean_name, "address": address}
+                        raw_idx += 1
+
+    # --- Schema: Norvège — 'activites' as day objects with nested programme ---
+    if "activites" in raw and isinstance(raw["activites"], list):
+        activites = raw["activites"]
+        has_day_objects = any(
+            isinstance(e, dict) and (e.get("programme") or e.get("titre"))
+            for e in activites
+        )
+        if has_day_objects:
+            normalized_acts = []
+            raw_entries = []  # parallel list of (label, address_candidate)
+            for entry in activites:
+                if isinstance(entry, dict):
+                    titre_jour = entry.get("titre", f"Jour {entry.get('jour', '?')}")
+                    resume = entry.get("resume", "")
+                    if resume:
+                        normalized_acts.append(f"[{titre_jour}] {resume[:150]}")
+                        raw_entries.append((resume[:150], ""))
+                    prog = entry.get("programme", [])
+                    prog_items = []
+                    if isinstance(prog, list):
+                        prog_items = prog
+                    elif isinstance(prog, dict):
+                        j = prog.get("journee", [])
+                        if isinstance(j, list):
+                            prog_items.extend(j)
+                        elif isinstance(j, dict):
+                            prog_items.append(j)
+                        s = prog.get("soiree_nuit", [])
+                        if isinstance(s, list):
+                            prog_items.extend(s)
+                        elif isinstance(s, dict):
+                            prog_items.append(s)
+                    for item in prog_items:
+                        if not isinstance(item, dict):
+                            continue
+                        act_text = item.get("activite", "")
+                        if act_text and act_text.strip():
+                            normalized_acts.append(f"[{titre_jour}] {act_text}")
+                            deplacement = (item.get("deplacement", "") or
+                                           item.get("deplacement_vers_depart", ""))
+                            raw_entries.append((act_text, deplacement))
+            if 0 <= activity_index < len(normalized_acts):
+                act_text, deplacement = raw_entries[activity_index]
+                clean_name = _clean_place_name(act_text)
+                if deplacement:
+                    address = f"{deplacement}, {destination}" if destination else deplacement
+                else:
+                    address = f"{clean_name}, {destination}" if destination else clean_name
+                return {"name": clean_name, "address": address}
+
+    # --- Schema: Londres — 'itineraires' with matin/apres_midi/soir ---
+    if "itineraires" in raw and isinstance(raw["itineraires"], list):
+        itineraires = raw["itineraires"]
+        normalized_acts = []
+        raw_entries = []
+        for jour in itineraires:
+            titre_jour = jour.get("titre", f"Jour {jour.get('jour', '?')}")
+            for periode in ("matin", "apres_midi", "soir"):
+                bloc = jour.get(periode, {})
+                if not isinstance(bloc, dict):
+                    continue
+                act = bloc.get("activite")
+                if act:
+                    normalized_acts.append(f"[{titre_jour}] {act}")
+                    raw_entries.append((act, ""))
+                details = bloc.get("details", [])
+                if isinstance(details, list):
+                    for d in details:
+                        if isinstance(d, str) and len(d) < 200:
+                            normalized_acts.append(f"[{titre_jour}] {d}")
+                            raw_entries.append((d, ""))
+        if 0 <= activity_index < len(normalized_acts):
+            act_text, _ = raw_entries[activity_index]
+            clean_name = _clean_place_name(act_text)
+            address = f"{clean_name}, {destination}" if destination else clean_name
+            return {"name": clean_name, "address": address}
+
+    # --- Flat schema (Azores, Porto, Bretagne) — activites as strings ---
+    activites = raw.get("activites", [])
+    if isinstance(activites, list) and 0 <= activity_index < len(activites):
+        act = activites[activity_index]
+        if isinstance(act, str):
+            clean_name = _clean_place_name(act)
+            address = f"{clean_name}, {destination}" if destination else clean_name
+            return {"name": clean_name, "address": address}
+
+    # Fallback: use the activity name as-is
+    clean_name = _clean_place_name(activity_name)
+    address = f"{clean_name}, {destination}" if destination else clean_name
+    return {"name": clean_name, "address": address}
+
+
+def _clean_place_name(text: str) -> str:
+    """Extract a clean place name from an activity description.
+
+    Strips time prefixes, activity type prefixes, parenthetical content,
+    and compound descriptions to get just the place name.
+
+    Strategy:
+    1. Remove leading [time]/[Jour] prefixes and time stamps
+    2. Remove parenthetical content (before dash splitting so word counts are clean)
+    3. Split on em-dash/pipe separators:
+       - If BEFORE the dash looks like an activity prefix -> take AFTER
+       - If AFTER the dash looks like a description -> take BEFORE
+    4. Remove trailing compound descriptions after "+"
+    5. Remove leading French activity verbs (Marche, Visite, etc.)
+    6. If the result still starts with a French preposition (sur, a, au...),
+       try to extract the place name after it
+
+    Examples:
+        "Randonnee - Temescal Gateway Park (boucle)" -> "Temescal Gateway Park"
+        "[08:00] Marche matinale sur Santa Monica Beach" -> "Santa Monica Beach"
+        "Petit-dejeuner - The Misfit Restaurant + Bar" -> "The Misfit Restaurant"
+        "Visite des caves de Porto (degustation)" -> "Caves de Porto"
+        "Venice Canals - balade pittoresque" -> "Venice Canals"
+        "Getty Villa - musee d'antiquites" -> "Getty Villa"
+        "GR34 sentier des douaniers - Pointe de Pen-Hir" -> "Pointe de Pen-Hir"
+    """
+    import re
+    text = text.strip()
+
+    # Step 1: Remove leading [time] or [Jour X] prefix
+    text = re.sub(r'^\[[^\]]+\]\s*', '', text)
+
+    # Remove leading time like "08:00" or "08:00 -"
+    text = re.sub(r'^\d{1,2}:\d{2}\s*(?:-\s*)?', '', text)
+
+    # Step 2: Remove parenthetical content EARLY (before dash splitting
+    # so word counts are not inflated by parenthetical descriptions)
+    text = re.sub(r'\([^)]*\)', '', text)
+
+    # Step 3: Split on em-dash, en-dash, or pipe
+    parts = re.split(r'\s+[\u2014\u2013|]\s+', text, maxsplit=1)
+    if len(parts) == 2:
+        left, right = parts[0].strip(), parts[1].strip()
+
+        # Known activity-type prefixes (what comes BEFORE the dash)
+        activity_prefixes = [
+            'Randonn\u00e9e', 'Rando', 'Marche', 'Visite', 'Observation',
+            'Baignade', 'Promenade', 'Tour', 'D\u00e9couverte', 'Balade',
+            'Arriv\u00e9e', 'D\u00e9part', 'Retour', 'Installation', 'Location',
+            'Trajet', 'D\u00eener', 'D\u00e9jeuner', 'Petit-d\u00e9jeuner',
+            'Soir\u00e9e', 'Excursion', 'Fin de journ\u00e9e', 'Bain', 'Bains',
+        ]
+        left_lower = left.lower()
+        left_starts_with_activity = any(
+            left_lower.startswith(p.lower()) for p in activity_prefixes
+        )
+
+        # Check if right side looks like a description (lowercase, starts with
+        # common French description words)
+        desc_starts = [
+            'balade', 'mus\u00e9e', 'musee', 'visite', 'randonn\u00e9e', 'randonnee',
+            'marche', 'd\u00e9couverte', 'decouverte', 'excursion',
+            'promenade', 'observation', 'sentier', 'boucle',
+            'crat\u00e8re', 'cratere', 'crater', 'panorama', 'vue',
+            'd\u00e9tente', 'detente', 'pause',
+            'installation', 'trajet', 'retour', 'arriv\u00e9e', 'arrivee',
+            'd\u00e9part', 'depart',
+            'soir\u00e9e', 'soiree', 'd\u00eener', 'diner', 'd\u00e9jeuner', 'dejeuner',
+            'petit-d\u00e9jeuner', 'petit-dejeuner',
+            'programme', 'itin\u00e9raire', 'itineraire',
+            '\u00e9tape', 'etape', 'r\u00e9sum\u00e9', 'resume',
+            'pittoresque', 'panoramique', 'culturelle',
+        ]
+        right_lower = right.lower()
+        right_is_description = right_lower.startswith(tuple(desc_starts))
+
+        if left_starts_with_activity and not right_is_description:
+            # "Randonnee - Temescal Gateway Park" -> "Temescal Gateway Park"
+            text = right
+        elif right_is_description and not left_starts_with_activity:
+            # "Venice Canals - balade pittoresque" -> "Venice Canals"
+            text = left
+        elif left_starts_with_activity and right_is_description:
+            # Left has activity prefix, right is a description.
+            # Clean left (strip activity prefix) and if a place name remains, use it.
+            # e.g., "Retour vers Santa Monica - detente & pause" -> "Santa Monica"
+            left_cleaned = left
+            for p in activity_prefixes:
+                if left_cleaned.lower().startswith(p.lower()):
+                    left_cleaned = left_cleaned[len(p):]
+                    break
+            left_cleaned = left_cleaned.strip()
+            # Try to extract place name from cleaned left (e.g., "vers Santa Monica" -> "Santa Monica")
+            import re as _re
+            if left_cleaned:
+                prep_match = _re.search(
+                    r'\b(?:vers|sur|\u00e0|au|de la|du|des|de|dans le|dans la)\s+(.+)',
+                    left_cleaned
+                )
+                if prep_match:
+                    extracted_left = prep_match.group(1).strip()
+                    stop_words = (' et ', ', ', 'puis', 'avec', 'pour', 'vers')
+                    if len(extracted_left) < 80 and not any(w in extracted_left.lower() for w in stop_words):
+                        left_cleaned = extracted_left
+            # Only use left_cleaned if it looks like a place name (not a preposition fragment)
+            # Reject if it starts with a preposition or is too short (< 3 chars)
+            preposition_starts = ('de ', 'du ', 'des ', 'vers ', 'sur ', 'au ', 'la ', 'le ', 'à ')
+            looks_like_place = (
+                left_cleaned and
+                len(left_cleaned) >= 3 and
+                not any(left_cleaned.lower().startswith(p) for p in preposition_starts)
+            )
+            if looks_like_place:
+                text = left_cleaned
+            else:
+                text = right
+        else:
+            # Ambiguous: prefer the side that looks more like a place name.
+            left_words = len(left.split())
+            right_words = len(right.split())
+            if right_words > 0 and right_words <= 4 and left_words > 2:
+                # Right is short enough to be a place name
+                text = right
+            elif left_words > 0 and left_words <= 4 and not left_lower.startswith(
+                tuple(p.lower() for p in activity_prefixes)
+            ):
+                # Left is short and not an activity prefix -> it is the place
+                text = left
+            else:
+                text = right  # default: take after the dash
+
+    # Step 4: Split on "+" or "&" to take just the first place if compound
+    text = re.split(r'\s*(?:\+|&)\s*', text)[0]
+
+    # Step 5: Remove leading French activity prefixes (longest first)
+    prefixes = [
+        'Randonn\u00e9e ', 'Rando ', 'Marche matinale ', 'Marche ',
+        'Visite du ', 'Visite de la ', 'Visite des ', 'Visite de ',
+        'Visite ',
+        'Observation des ', 'Observation du ', 'Observation ',
+        'Baignade ', 'Promenade ', 'Tour de ', 'Tour ',
+        'D\u00e9couverte de ', 'D\u00e9couverte du ', 'D\u00e9couverte ',
+        'Balade ', 'Arriv\u00e9e ', 'D\u00e9part ', 'Retour ',
+        'Installation ', 'Location de v\u00e9lo ', 'Location ',
+        'Trajet ', 'D\u00eener ', 'D\u00e9jeuner ',
+        'Petit-d\u00e9jeuner ', 'Soir\u00e9e ', 'Excursion ',
+        'Fin de journ\u00e9e ', 'Bain ', 'Bains ',
+        'Arr\u00eat \u00e0 ', 'Arr\u00eat ',
+    ]
+    for p in prefixes:
+        if text.startswith(p):
+            text = text[len(p):]
+            break
+
+    # Step 6: If the remaining text still looks like a sentence (starts with
+    # a French preposition), try to extract the place name after it.
+    # Only do this if the text is long enough to be a sentence (> 15 chars)
+    # AND the text before the preposition looks like a description word
+    # (not a place name like "Pointe de Pen-Hir").
+    if len(text) > 15:
+        place_match = re.search(
+            r'\b(?:sur|\u00e0|au|de la|du|des|de|dans le|dans la|vers)\s+(.+)',
+            text
+        )
+        if place_match:
+            # Check the text BEFORE the preposition: if it is a known activity
+            # verb or description word, extraction is safe.
+            before_prep = text[:place_match.start()].strip().lower()
+            # Activity/description words that indicate the text before the
+            # preposition is a description, not part of a place name
+            activity_desc_words = (
+                'matinale', 'matin', 'thermale', 'thermaux',
+                'nocturne', 'observation',
+            )
+            should_extract = (
+                not before_prep or
+                any(v in before_prep for v in activity_desc_words)
+            )
+            extracted = place_match.group(1).strip()
+            stop_words = (' et ', ', ', 'puis', 'avec', 'pour', 'vers')
+            if (should_extract and
+                len(extracted) < 80 and
+                not any(w in extracted.lower() for w in stop_words)):
+                text = extracted
+
+    # Clean whitespace
+    text = ' '.join(text.split())
+
+    # Capitalize first letter if the result is all lowercase
+    if text and text[0].islower():
+        text = text[0].upper() + text[1:]
+
+    return text.strip()
+
+
+
 def get_adventurelog_api_key() -> Optional[str]:
     """Load AdventureLog API key from .env file."""
     env_file = HERMES_HOME / ".env"
@@ -2280,21 +2639,27 @@ def get_adventurelog_api_key() -> Optional[str]:
 
 @app.post("/api/adventurelog/location")
 async def api_add_adventurelog_location(loc: AdventureLogLocation, _=Depends(check_auth)):
-    """Create a location in AdventureLog via its REST API.
+    """Create a location in AdventureLog via its REST API (legacy endpoint).
 
-    POSTs to AdventureLog to create a new location (without collection).
-    Returns the created location data from AdventureLog.
+    Kept for backward compatibility. Prefer /api/adventurelog/add which
+    handles place name extraction and geocoding automatically.
     """
     api_key = get_adventurelog_api_key()
     if not api_key:
         raise HTTPException(status_code=500, detail="Clé API AdventureLog introuvable dans .env")
 
     api_url = "https://adventurelog.wired-lan.fr/api/locations"
-    body = json.dumps({
+    body_dict = {
         "name": loc.name,
         "location": loc.location,
         "is_public": loc.is_public,
-    }).encode("utf-8")
+    }
+    # Include lat/long if provided
+    if loc.latitude is not None:
+        body_dict["latitude"] = loc.latitude
+    if loc.longitude is not None:
+        body_dict["longitude"] = loc.longitude
+    body = json.dumps(body_dict).encode("utf-8")
 
     req = urllib.request.Request(api_url, data=body, headers={
         "Authorization": f"Api-Key {api_key}",
@@ -2318,6 +2683,103 @@ async def api_add_adventurelog_location(loc: AdventureLogLocation, _=Depends(che
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erreur AdventureLog: {str(e)}")
+
+
+@app.post("/api/adventurelog/add")
+async def api_add_adventurelog_from_proposition(req: AdventureLogAddRequest, _=Depends(check_auth)):
+    """Add a proposition activity as a location in AdventureLog.
+
+    Full pipeline:
+    1. Load the RAW proposition JSON to extract the proper place name and address
+    2. Geocode the address via Nominatim (cached, rate-limited)
+    3. POST to AdventureLog with name, location, latitude, longitude
+
+    The geocoding step is async (runs in a thread pool) so it does not block
+    the event loop. Nominatim results are cached on disk to avoid repeated calls.
+
+    Returns the created location data from AdventureLog, including the
+    extracted place name and geocoded coordinates.
+    """
+    api_key = get_adventurelog_api_key()
+    if not api_key:
+        raise HTTPException(status_code=500, detail="Clé API AdventureLog introuvable dans .env")
+
+    # Step 1: Extract place name and address from the raw proposition
+    place_info = _extract_place_info_for_adventurelog(
+        req.prop_id, req.activity_index, req.activity_name
+    )
+    place_name = place_info["name"]
+    address = place_info["address"]
+
+    # Step 2: Geocode the address via Nominatim (async, cached)
+    # Run in thread pool since geocode_with_fallbacks does blocking I/O
+    loop = asyncio.get_event_loop()
+    geo_result = await loop.run_in_executor(
+        None, geocode_with_fallbacks, address
+    )
+
+    latitude = None
+    longitude = None
+    if geo_result:
+        # Truncate to 6 decimal places to satisfy AdventureLog's
+        # validation: latitude max 6 decimals, longitude max 9 total digits.
+        lat_val = geo_result.get("lat", "")
+        lon_val = geo_result.get("lon", "")
+        if isinstance(lat_val, (float, int)):
+            latitude = f"{lat_val:.6f}"
+        elif lat_val:
+            latitude = str(lat_val)
+        if isinstance(lon_val, (float, int)):
+            longitude = f"{lon_val:.6f}"
+        elif lon_val:
+            longitude = str(lon_val)
+        # Use the display_name from Nominatim as a better address if available
+        display = geo_result.get("display_name", "")
+        if display:
+            address = display
+
+    # Step 3: POST to AdventureLog
+    api_url = "https://adventurelog.wired-lan.fr/api/locations"
+    body_dict = {
+        "name": place_name,
+        "location": address,
+        "is_public": False,
+    }
+    if latitude is not None:
+        body_dict["latitude"] = latitude
+    if longitude is not None:
+        body_dict["longitude"] = longitude
+    body = json.dumps(body_dict).encode("utf-8")
+
+    req_to_al = urllib.request.Request(api_url, data=body, headers={
+        "Authorization": f"Api-Key {api_key}",
+        "Content-Type": "application/json",
+        "Accept": "application/json",
+    }, method="POST")
+
+    try:
+        with urllib.request.urlopen(req_to_al, timeout=15) as resp:
+            response_data = json.loads(resp.read().decode("utf-8"))
+            return {
+                "status": "ok",
+                "location": response_data,
+                "place_name": place_name,
+                "address": address,
+                "geocoded": latitude is not None,
+            }
+    except urllib.error.HTTPError as e:
+        error_body = ""
+        try:
+            error_body = e.read().decode("utf-8", errors="replace")[:500]
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=e.code,
+            detail=f"AdventureLog API error {e.code}: {error_body}",
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erreur AdventureLog: {str(e)}")
+
 
 
 @app.get("/api/adventurelog/locations")
