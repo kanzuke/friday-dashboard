@@ -1,59 +1,88 @@
 # Friday Dashboard
 
-Dashboard web unifié pour la flotte d'agents Hermes de Mathieu. Regroupe tous les outils en une seule interface accessible via ZeroTier.
+Dashboard web unifié pour la flotte d'agents Hermes de Mathieu.
+Regroupe tous les outils en une seule interface accessible via ZeroTier.
 
-## Fonctionnalités
+## Description
 
-### Home
-- Statut système en temps réel (uptime, services actifs)
-- Liste des agents Hermes (Friday, Findy, Spoty, Dev, Travely) avec statut gateway
-- Compteurs de tâches kanban par agent
+Le Friday Dashboard est l'interface centrale qui unifie la supervision et
+l'interaction avec la flotte d'agents Hermes (Friday, Findy, Spoty, Dev,
+Travely). Il expose en une seule page web :
 
-### Voyages (Travely)
-- Propositions de voyage en cartes
-- Images Wikimedia Commons + liens Wikipedia pour chaque activité
-- Boutons Valider / Réorienter / Refuser
-- Système de commentaires
-- Cartes interactives (Leaflet) pour visualiser les propositions
-
-### Immobilier (Findy)
-- Tableau des annonces depuis Nextcloud Tables (ID 4)
-- Colonnes: titre, prix, surface, €/m², statut, lien
-
-### Véhicules (Spoty)
-- Tableau des annonces depuis Nextcloud Tables (ID 5)
-- Colonnes: titre, prix, année, kilométrage, carburant, portes, localisation, lien
-
-### Chat Friday
-- Interface de chat texte avec Friday (profil default)
-- Input vocal: bouton micro → Whisper (local) → texte
-- Output vocal: TTS edge-tts (bouton haut-parleur)
-- 4 voix françaises disponibles
+- **Home** — statut système en temps réel (uptime, services actifs), liste des
+  agents avec statut gateway, compteurs de tâches kanban.
+- **Voyages (Travely)** — propositions de voyage en cartes, images Wikimedia
+  Commons + liens Wikipedia, boutons Valider / Réorienter / Refuser, système
+  de commentaires, cartes interactives (Leaflet).
+- **Immobilier (Findy)** — tableau des annonces depuis Nextcloud Tables (ID 4).
+- **Véhicules (Spoty)** — tableau des annonces depuis Nextcloud Tables (ID 5).
+- **Chat Friday** — interface de chat texte + vocal avec Friday.
+  STT via faster-whisper (local), TTS via edge-tts.
+- **Paramètres** — sélection de voix TTS, configuration du dashboard.
 
 ## Stack technique
 
-- **Backend**: Python FastAPI + uvicorn
-- **Frontend**: HTML/CSS/JS + Tailwind CSS (SPA)
-- **Cartes**: Leaflet.js + OpenStreetMap
-- **TTS**: edge-tts (Microsoft Edge TTS, gratuit)
-- **STT**: faster-whisper (local, CPU)
-- **Chat**: Hermes CLI (`hermes chat -q`)
-- **Données**: JSON + Nextcloud Tables (OCS API)
-- **Auth**: Basic Auth
+| Composant | Technologie |
+|-----------|-------------|
+| Backend | Python 3.11+ / FastAPI / uvicorn |
+| Frontend | HTML/CSS/JS SPA + Tailwind CSS |
+| Cartes | Leaflet.js + OpenStreetMap |
+| TTS | edge-tts (Microsoft Edge TTS, gratuit) |
+| STT | faster-whisper (local, CPU) |
+| Chat | Hermes CLI (`hermes chat -q`) |
+| Données | JSON + Nextcloud Tables (OCS API) |
+| Authentification | HTTP Basic Auth |
+| SSL | Certificat auto-signé (HTTPS pour `getUserMedia`) |
+| Déploiement | systemd (le projet n'est pas dockerisé) |
+
+> **Note sur Docker** : le projet n'utilise pas Docker actuellement.
+> Il s'exécute nativement via un service systemd sur le VPS. Un conteneur
+> Docker pourrait être ajouté si besoin, mais le déploiement actuel repose
+> sur le venv Hermes.
 
 ## Installation
 
 ### Prérequis
 
 - Python 3.11+
-- Hermes Agent installé (`/usr/local/lib/hermes-agent/venv/`)
+- [Hermes Agent](https://hermes-agent.nousresearch.com) installé
+  (`/usr/local/lib/hermes-agent/venv/`)
 - ZeroTier configuré (réseau `cf719fd5405d8a17`)
-- edge-tts, faster-whisper installés dans le venv Hermes
+- `edge-tts` et `faster-whisper` installés dans le venv Hermes
 
-### Déploiement
+### Développement local
 
 ```bash
-# Cloner le dépôt
+# 1. Cloner le dépôt
+git clone https://github.com/kanzuke/friday-dashboard.git
+cd friday-dashboard
+
+# 2. Créer un environnement virtuel
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 3. Installer les dépendances
+pip install -r requirements.txt
+
+# 4. Configurer les variables d'environnement (voir section Configuration)
+
+# 5. Lancer le dashboard
+python app.py
+```
+
+Le serveur démarre sur `https://10.245.243.1:9120` (si les certificats SSL
+sont présents) ou `http://10.245.243.1:9120` (fallback HTTP).
+
+Pour un développement sans ZeroTier, on peut forcer l'écoute locale :
+
+```bash
+DASHBOARD_HOST=127.0.0.1 DASHBOARD_PORT=9120 python app.py
+```
+
+### Déploiement en production (systemd)
+
+```bash
+# Cloner vers /opt/hermes-dashboard
 git clone https://github.com/kanzuke/friday-dashboard.git /opt/hermes-dashboard
 
 # Installer le service systemd
@@ -63,22 +92,98 @@ systemctl enable friday-dashboard
 systemctl start friday-dashboard
 ```
 
-### Configuration
+## Configuration
 
-Le service lit sa configuration depuis les variables d'environnement systemd:
+### Variables d'environnement
+
+Le service lit sa configuration depuis les variables d'environnement
+(définies dans le fichier systemd ou exportées avant `python app.py`) :
 
 | Variable | Description | Défaut |
 |----------|-------------|--------|
 | `DASHBOARD_HOST` | Adresse d'écoute | `10.245.243.1` (ZeroTier) |
 | `DASHBOARD_PORT` | Port d'écoute | `9120` |
 | `DASHBOARD_USER` | Utilisateur Basic Auth | `mathieu` |
-| `DASHBOARD_PASS` | Mot de passe Basic Auth | (à définir) |
+| `DASHBOARD_PASS` | Mot de passe Basic Auth | `toto` |
+| `HERMES_HOME` | Racine Hermes (`~/.hermes`) | `/root/.hermes` |
+
+### Fichier `.env`
+
+Le dashboard lit les credentials tiers depuis `~/.hermes/.env` (le fichier
+`.env` à la racine de Hermes, pas celui du dépôt). Clés attendues :
+
+```bash
+# Nextcloud Tables (récupération des annonces Findy + Spoty)
+NEXTCLOUD_URL=https://cloud.wired-lan.fr
+NEXTCLOUD_USER=<utilisateur>
+NEXTCLOUD_APP_PASSWORD=<app password>
+
+# AdventureLog (création de locations depuis les propositions Travely)
+ADVENTURELOG_API_KEY=<api key>
+```
+
+> Le fichier `.env` est ignoré par `.gitignore` et ne doit jamais être committé.
+
+### Credentials GitHub pour le push
+
+Le script `git_push.sh` effectue `git push origin main`. Il nécessite :
+
+1. **Token GitHub** (Personal Access Token avec scope `repo`) configuré :
+   ```bash
+   git remote set-url origin https://<token>@github.com/kanzuke/friday-dashboard.git
+   ```
+   Ou via credential helper :
+   ```bash
+   git config --global credential.helper store
+   # puis un premier push interactif pour sauvegarder le token
+
+   ```
+
+2. **Ou clé SSH** :
+   ```bash
+   git remote set-url origin git@github.com:kanzuke/friday-dashboard.git
+   ```
+   La clé SSH publique doit être ajoutée dans Settings → SSH keys sur GitHub.
 
 ## Accès
 
-- **URL**: `http://10.245.243.1:9120` (via ZeroTier)
-- **Auth**: Basic Auth (mathieu / mot de passe)
-- **Réseau**: ZeroTier network `cf719fd5405d8a17`
+### Réseau ZeroTier
+
+Le dashboard est accessible uniquement depuis le réseau ZeroTier privé :
+
+- **Network ID** : `cf719fd5405d8a17`
+- **IP du dashboard** : `10.245.243.1`
+- **Port** : `9120`
+- **URL** : `https://10.245.243.1:9120`
+- **Auth** : Basic Auth (`mathieu` / mot de passe)
+
+Pour accéder au dashboard, un appareil doit rejoindre le réseau ZeroTier
+et être autorisé par l'administrateur.
+
+### HTTPS (certificat auto-signé)
+
+Le dashboard utilise HTTPS avec un certificat auto-signé, nécessaire pour
+que le navigateur autorise l'accès au microphone (`getUserMedia`) utilisé
+par le chat vocal.
+
+**Générer les certificats** :
+
+```bash
+SSL_DIR=~/.hermes/dashboard-unified/ssl
+mkdir -p "$SSL_DIR"
+openssl req -x509 -newkey rsa:2048 -nodes \
+  -keyout "$SSL_DIR/key.pem" \
+  -cert "$SSL_DIR/cert.pem" \
+  -days 365 \
+  -subj "/CN=10.245.243.1"
+```
+
+Si les certificats sont absents, le serveur démarre en HTTP (fallback) mais
+le chat vocal ne fonctionnera pas (les navigateurs bloquent `getUserMedia`
+sur HTTP hors localhost).
+
+Le navigateur affichera un avertissement de sécurité — accepter le risque
+pour continuer.
 
 ## Structure du dépôt
 
@@ -86,9 +191,10 @@ Le service lit sa configuration depuis les variables d'environnement systemd:
 friday-dashboard/
 ├── app.py                  # Backend FastAPI (2121 lignes)
 ├── geocode_helpers.py      # Utilitaires géocoding (OSM/Nominatim)
-├── refresh_cache.py        # Script de refresh du cache propositions
+├── refresh_cache.py        # Refresh du cache propositions (NC Tables)
+├── git_push.sh             # Auto-commit + push vers origin/main
 ├── static/
-│   ├── index.html          # Frontend SPA (1672 lignes)
+│   ├── index.html          # Frontend SPA
 │   └── map.js              # Logique cartes Leaflet
 ├── systemd/
 │   └── friday-dashboard.service  # Unit systemd
@@ -118,17 +224,18 @@ friday-dashboard/
 | POST | `/api/voice` | Changer la voix TTS |
 | GET | `/api/voice-sample/{id}` | Sample audio d'une voix |
 | GET | `/api/config` | Config du dashboard |
+| POST | `/api/adventurelog/location` | Créer une location AdventureLog |
 
 ## Workflow de développement
 
-Après chaque modification du code, exécuter:
+Après chaque modification du code :
 
 ```bash
 cd /opt/hermes-dashboard
 ./git_push.sh "Description du changement"
 ```
 
-Ce script effectue automatiquement:
+Ce script effectue automatiquement :
 1. `git add -A`
 2. `git commit -m "<message>"`
 3. `git push origin main`
