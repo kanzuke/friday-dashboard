@@ -70,30 +70,7 @@
         .leaflet-bar { border-color: #334155 !important; }
         /* --- Responsive sidebar --- */
         .sidebar { z-index: 50; }
-        /* Mobile: sidebar hidden by default, slides in */
-        @media (max-width: 767px) {
-            .sidebar {
-                position: fixed;
-                left: 0; top: 0; bottom: 0;
-                width: 16rem;
-                transform: translateX(-100%);
-                transition: transform 0.3s ease;
-            }
-            .sidebar.open { transform: translateX(0); }
-            .sidebar-backdrop {
-                position: fixed; inset: 0; z-index: 49;
-                background: rgba(0,0,0,0.5);
-                opacity: 0; pointer-events: none;
-                transition: opacity 0.3s ease;
-            }
-            .sidebar-backdrop.open { opacity: 1; pointer-events: auto; }
-            .mobile-header { display: flex; }
-        }
-        @media (min-width: 768px) {
-            .sidebar { transform: translateX(0) !important; }
-            .sidebar-backdrop { display: none !important; }
-            .mobile-header { display: none !important; }
-        }
+        /* Mobile header (hidden by default, shown on mobile via media query) */
         .mobile-header {
             display: none;
             align-items: center;
@@ -108,6 +85,30 @@
             font-size: 1.5rem; cursor: pointer; padding: 4px 8px;
             line-height: 1;
         }
+        /* Mobile: sidebar hidden by default, slides in */
+        @media (max-width: 767px) {
+            .sidebar {
+                position: fixed !important;
+                left: 0; top: 0; bottom: 0;
+                width: 16rem;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            .sidebar.open { transform: translateX(0); }
+            .sidebar-backdrop {
+                position: fixed; inset: 0; z-index: 49;
+                background: rgba(0,0,0,0.5);
+                opacity: 0; pointer-events: none;
+                transition: opacity 0.3s ease;
+            }
+            .sidebar-backdrop.open { opacity: 1; pointer-events: auto; }
+            .mobile-header { display: flex !important; }
+        }
+        @media (min-width: 768px) {
+            .sidebar { transform: translateX(0) !important; }
+            .sidebar-backdrop { display: none !important; }
+            .mobile-header { display: none !important; }
+        }
         /* AdventureLog button states */
         .al-btn { font-size: 0.7rem; padding: 3px 10px; border-radius: 8px;
                   font-weight: 600; transition: all 0.2s; cursor: pointer;
@@ -121,7 +122,7 @@
 </head>
 <body class="text-slate-100 min-h-screen">
 
-    <div class="flex h-screen overflow-hidden">
+    <div class="flex flex-col md:flex-row h-screen overflow-hidden">
         <!-- Mobile hamburger header -->
         <div class="mobile-header">
             <button class="hamburger-btn" onclick="toggleSidebar()" id="hamburger-btn">☰</button>
@@ -171,7 +172,7 @@
         </aside>
 
         <!-- Main content (scrollable, sidebar stays fixed) -->
-        <main class="flex-1 overflow-y-auto h-screen flex flex-col">
+        <main class="flex-1 overflow-y-auto min-h-0 flex flex-col">
             <!-- HOME PAGE -->
             <div id="page-home" class="page p-4 md:p-6">
                 <h2 class="text-2xl font-bold text-sky-400 mb-6">Statut du système</h2>
@@ -185,12 +186,12 @@
 
             <!-- VOYAGES PAGE -->
             <div id="page-voyages" class="page p-4 md:p-6 hidden">
-                <div class="flex items-center justify-between mb-6">
-                    <h2 class="text-2xl font-bold text-sky-400">Propositions de voyage</h2>
-                    <div id="voyages-stats" class="text-sm text-slate-400"></div>
+                <div class="flex flex-col md:flex-row md:items-center justify-between mb-6 gap-2">
+                    <h2 class="text-xl md:text-2xl font-bold text-sky-400">Propositions de voyage</h2>
+                    <div id="voyages-stats" class="text-xs sm:text-sm text-slate-400 flex flex-wrap gap-x-2 gap-y-1"></div>
                 </div>
                 <!-- Filter bar -->
-                <div class="flex items-center gap-3 mb-6 flex-wrap">
+                <div class="flex flex-col sm:flex-row sm:items-center gap-3 mb-6 flex-wrap">
                     <span class="text-sm text-slate-500">Filtrer:</span>
                     <select id="voyages-filter" onchange="applyVoyagesFilter()"
                         class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-sky-500 focus:outline-none flex-1 sm:flex-none sm:min-w-[200px]">
@@ -240,9 +241,9 @@
 
             <!-- CHAT PAGE -->
             <div id="page-chat" class="page p-4 md:p-6 hidden flex flex-col h-full flex-1">
-                <div class="flex items-center justify-between mb-4">
-                    <h2 class="text-2xl font-bold text-sky-400">Chat avec Friday</h2>
-                    <button onclick="clearChatHistory()" class="text-xs text-slate-500 hover:text-red-400 transition px-3 py-1.5 border border-slate-700 hover:border-red-700 rounded-lg">🗑️ Effacer l'historique</button>
+                <div class="flex flex-col md:flex-row md:items-center justify-between mb-4 gap-2">
+                    <h2 class="text-xl md:text-2xl font-bold text-sky-400">Chat avec Friday</h2>
+                    <button onclick="clearChatHistory()" class="text-xs text-slate-500 hover:text-red-400 transition px-3 py-1.5 border border-slate-700 hover:border-red-700 rounded-lg self-start md:self-auto">🗑️ Effacer l'historique</button>
                 </div>
                 <div id="chat-messages" class="flex-1 overflow-y-auto space-y-4 mb-4 bg-slate-900 rounded-xl border border-slate-700 p-4" style="min-height: 300px;">
                     <div class="text-center text-slate-500 py-8">
