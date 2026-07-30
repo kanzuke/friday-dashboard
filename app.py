@@ -200,46 +200,118 @@ def ensure_dirs():
 def normalize_proposition(data: dict, file_id: str) -> dict:
     """Normalize a proposition to the dashboard's expected schema.
 
-    Some propositions (e.g., Londres) use a richer nested schema with
-    'metadata', 'itineraires', 'budget_estime', etc. This function
-    adapts them to the flat schema the dashboard expects:
+    Handles multiple proposition schemas used by Travely over time:
+    1. Flat schema (Azores, Porto, Bretagne): top-level 'destination', 'pays',
+       'duree_jours', 'activites' (list of strings), 'budget_total'.
+    2. Londres schema: 'metadata.ville_principale', 'itineraires' (day-by-day
+       with matin/apres_midi/soir), 'budget_estime', 'transport.aller.option_recommandee'.
+    3. Norvège schema: 'metadata.destination_principale', 'activites' (list of
+       day objects with nested 'programme' arrays), 'budget.BUDGET_TOTAL_ESTIME_EUR',
+       'transport.aller.etapes'.
+    4. Santa Monica schema: 'metadata.ville', top-level 'programme' array with
+       'position' fields, 'budget_total_estime.total', 'transport_local'.
+
+    All are normalized to the flat schema the dashboard expects:
     id, date, destination, pays, duree_jours, transport, hebergement,
     activites[], budget_total, saison, randonnee{}
     """
-    # Already has the expected schema (flat with 'destination' key)
-    if "destination" in data:
+    # Already has the expected flat schema
+    if "destination" in data and not data.get("metadata"):
         return data
 
-    # Try to normalize from the nested schema
+    # If it has 'destination' but ALSO has metadata, still normalize (enriched flat)
     meta = data.get("metadata", {})
     if not meta:
         return data
 
-    # Build destination from metadata
-    ville = meta.get("ville_principale", "")
+    # --- Destination ---
+    ville = (meta.get("ville_principale", "") or
+             meta.get("destination_principale", "") or
+             meta.get("ville", ""))
     pays = meta.get("pays", "")
+    # Santa Monica: no 'pays' field, but 'ville' contains country at the end
+    if not pays and ville:
+        parts = ville.split(",")
+        if len(parts) >= 2:
+            pays = parts[-1].strip()
     destination = ville
     if pays and ville:
-        destination = f"{ville}, {pays}"
+        # Avoid duplicating the country if ville already ends with it
+        if not ville.rstrip().endswith(pays):
+            destination = f"{ville}, {pays}"
+        else:
+            destination = ville
     elif pays:
         destination = pays
+    elif not ville:
+        # Fall back to titre if no ville-like field
+        destination = meta.get("titre", "Destination inconnue")
 
-    # Extract activities from itineraires (jour-by-jour)
+    # --- Activities ---
     activites = []
     itineraires = data.get("itineraires", [])
-    for jour in itineraires:
-        titre_jour = jour.get("titre", f"Jour {jour.get('jour', '?')}")
-        # Collect activities from matin/apres_midi/soir
-        for periode in ("matin", "apres_midi", "soir"):
-            bloc = jour.get(periode, {})
-            act = bloc.get("activite")
-            if act:
-                activites.append(f"[{titre_jour}] {act}")
-            details = bloc.get("details", [])
-            if isinstance(details, list):
-                for d in details:
-                    if isinstance(d, str) and len(d) < 200:
-                        activites.append(f"[{titre_jour}] {d}")
+
+    # Schema: itineraires (Londres) — day-by-day with matin/apres_midi/soir
+    if itineraires:
+        for jour in itineraires:
+            titre_jour = jour.get("titre", f"Jour {jour.get('jour', '?')}")
+            for periode in ("matin", "apres_midi", "soir"):
+                bloc = jour.get(periode, {})
+                if not isinstance(bloc, dict):
+                    continue
+                act = bloc.get("activite")
+                if act:
+                    activites.append(f"[{titre_jour}] {act}")
+                details = bloc.get("details", [])
+                if isinstance(details, list):
+                    for d in details:
+                        if isinstance(d, str) and len(d) < 200:
+                            activites.append(f"[{titre_jour}] {d}")
+
+    # Schema: activites as list of day objects (Norvège) — each day has titre + programme
+    elif "activites" in data and isinstance(data["activites"], list):
+        for entry in data["activites"]:
+            if isinstance(entry, dict):
+                titre_jour = entry.get("titre", f"Jour {entry.get('jour', '?')}")
+                resume = entry.get("resume", "")
+                if resume:
+                    activites.append(f"[{titre_jour}] {resume[:150]}")
+                # Also extract individual programme items
+                prog = entry.get("programme", [])
+                if isinstance(prog, list):
+                    for item in prog:
+                        if isinstance(item, dict):
+                            act_text = item.get("activite", "")
+                            if act_text and len(act_text) < 200:
+                                activites.append(f"[{titre_jour}] {act_text}")
+                elif isinstance(prog, dict):
+                    # Norvège J5: programme is a dict with 'journee' and 'soiree_nuit'
+                    for sub_key in ("journee", "soiree_nuit"):
+                        sub_items = prog.get(sub_key, [])
+                        if isinstance(sub_items, list):
+                            for item in sub_items:
+                                if isinstance(item, dict):
+                                    act_text = item.get("activite", "")
+                                    if act_text and len(act_text) < 200:
+                                        activites.append(f"[{titre_jour}] {act_text}")
+                        elif isinstance(sub_items, dict):
+                            act_text = sub_items.get("activite", "")
+                            if act_text and len(act_text) < 200:
+                                activites.append(f"[{titre_jour}] {act_text}")
+            elif isinstance(entry, str):
+                activites.append(entry)
+
+    # Schema: programme as flat list (Santa Monica) — items with activite + position
+    elif "programme" in data and isinstance(data["programme"], list):
+        for entry in data["programme"]:
+            if isinstance(entry, dict):
+                act_text = entry.get("activite", entry.get("nom", ""))
+                if act_text:
+                    heure = entry.get("heure", "")
+                    if heure:
+                        activites.append(f"[{heure}] {act_text}")
+                    else:
+                        activites.append(act_text)
 
     # Deduplicate and limit
     seen = set()
@@ -248,11 +320,13 @@ def normalize_proposition(data: dict, file_id: str) -> dict:
         if a not in seen:
             seen.add(a)
             unique_activites.append(a)
-    unique_activites = unique_activites[:15]  # cap at 15
+    unique_activites = unique_activites[:20]  # cap at 20
 
-    # Budget
+    # --- Budget ---
+    budget_total = "?"
+    # Try budget_estime (Londres)
     budget_data = data.get("budget_estime", {})
-    if budget_data:
+    if isinstance(budget_data, dict) and budget_data:
         budget_min = budget_data.get("total_min_eur")
         budget_max = budget_data.get("total_max_eur")
         budget_moyen = budget_data.get("total_moyen_estime_eur")
@@ -260,38 +334,96 @@ def normalize_proposition(data: dict, file_id: str) -> dict:
             budget_total = f"~{budget_moyen}€"
         elif budget_min and budget_max:
             budget_total = f"{budget_min}-{budget_max}€"
-        else:
-            budget_total = "?"
-    else:
-        budget_total = data.get("budget_total", "?")
+    # Try budget (Norvège)
+    if budget_total == "?" and "budget" in data:
+        bud = data["budget"]
+        if isinstance(bud, dict):
+            total = (bud.get("BUDGET_TOTAL_ESTIME_EUR") or
+                     bud.get("budget_total_estime_eur") or
+                     bud.get("total_eur"))
+            if total:
+                budget_total = f"~{total}€"
+            else:
+                # Try sub-totals
+                par_jour = bud.get("budget_par_jour_eur")
+                if par_jour:
+                    budget_total = f"~{par_jour}€/jour"
+    # Try budget_total_estime (Santa Monica)
+    if budget_total == "?" and "budget_total_estime" in data:
+        bud = data["budget_total_estime"]
+        if isinstance(bud, dict):
+            total = bud.get("total", "")
+            if total:
+                budget_total = str(total)
+    # Fall back to flat budget_total
+    if budget_total == "?":
+        budget_total = str(data.get("budget_total", "?"))
 
-    # Transport summary
+    # --- Transport ---
+    transport_summary = "?"
     transport_data = data.get("transport", {})
-    if transport_data:
+    if isinstance(transport_data, dict) and transport_data:
+        # Londres: transport.aller.option_recommandee.description
         aller = transport_data.get("aller", {})
-        opt = aller.get("option_recommandee", {})
-        transport_summary = opt.get("description", "")
-        total_transport = transport_data.get("transport_total_estime_eur", "")
+        if isinstance(aller, dict):
+            opt = aller.get("option_recommandee", {})
+            if isinstance(opt, dict) and opt:
+                transport_summary = opt.get("description", "")
+            else:
+                # Norvège: transport.aller.etapes (list of step dicts)
+                etapes = aller.get("etapes", [])
+                if isinstance(etapes, list) and etapes:
+                    moyens = []
+                    for e in etapes:
+                        if isinstance(e, dict):
+                            moyen = e.get("moyen", "")
+                            if moyen:
+                                moyens.append(moyen)
+                    if moyens:
+                        transport_summary = " → ".join(moyens)
+        total_transport = (transport_data.get("transport_total_estime_eur") or
+                           transport_data.get("cout_transport_total_eur"))
         if total_transport:
-            transport_summary = f"{transport_summary} ({total_transport}€)" if transport_summary else f"{total_transport}€"
-    else:
-        transport_summary = data.get("transport", "?")
+            transport_summary = f"{transport_summary} ({total_transport}€)" if transport_summary != "?" else f"{total_transport}€"
+    elif isinstance(transport_data, str):
+        transport_summary = transport_data
+    # Santa Monica: transport_local (not 'transport')
+    if transport_summary == "?" and "transport_local" in data:
+        tl = data["transport_local"]
+        if isinstance(tl, dict):
+            total = tl.get("total_transport_local", "")
+            if total:
+                transport_summary = str(total)
+        elif isinstance(tl, str):
+            transport_summary = tl
 
-    # Hebergement summary
+    # --- Hebergement ---
+    hebergement_summary = "?"
     heberg_data = data.get("hebergement", {})
-    if heberg_data:
+    if isinstance(heberg_data, dict) and heberg_data:
+        # Londres: hebergement.recommandation.quartier
         reco = heberg_data.get("recommandation", {})
-        quartier = reco.get("quartier", "")
-        total_heb = heberg_data.get("hebergement_total_estime_eur", "")
-        hebergement_summary = quartier
-        if total_heb:
-            hebergement_summary = f"{quartier} ({total_heb}€)" if quartier else f"{total_heb}€"
-    else:
-        hebergement_summary = data.get("hebergement", "?")
+        if isinstance(reco, dict) and reco:
+            quartier = reco.get("quartier", "")
+            total_heb = heberg_data.get("hebergement_total_estime_eur", "")
+            hebergement_summary = quartier
+            if total_heb:
+                hebergement_summary = f"{quartier} ({total_heb}€)" if quartier else f"{total_heb}€"
+        else:
+            # Norvège: hebergement.type + options
+            heb_type = heberg_data.get("type", "")
+            total_heb = (heberg_data.get("cout_hebergement_total_eur") or
+                         heberg_data.get("hebergement_total_estime_eur"))
+            hebergement_summary = heb_type
+            if total_heb:
+                hebergement_summary = f"{heb_type} ({total_heb}€)" if heb_type else f"{total_heb}€"
+    elif isinstance(heberg_data, str):
+        hebergement_summary = heberg_data
 
-    # Randonnée: look for a journey with "randonnée" in its title or note
+    # --- Randonnée ---
     randonnee = data.get("randonnee")
     if not randonnee:
+        # Look in itineraires (Londres)
         for jour in itineraires:
             if "rando" in jour.get("titre", "").lower() or "rando" in jour.get("note", "").lower():
                 matin = jour.get("matin", {})
@@ -299,19 +431,58 @@ def normalize_proposition(data: dict, file_id: str) -> dict:
                 rando_name = jour.get("titre", "Randonnée")
                 rando_acces = matin.get("transfert_detail", "")
                 if rando_details:
-                    # Find the first detail that mentions the trail name
                     for d in rando_details:
                         if isinstance(d, str) and ("sentier" in d.lower() or "randonnée" in d.lower() or "km" in d.lower()):
                             rando_name = d[:80]
                             break
                 randonnee = {"nom": rando_name, "acces": rando_acces}
                 break
+    if not randonnee:
+        # Look in activites day objects (Norvège)
+        for entry in data.get("activites", []):
+            if isinstance(entry, dict):
+                titre = entry.get("titre", "").lower()
+                if "randonnée" in titre or "rando" in titre or "raquettes" in titre:
+                    rando_name = entry.get("titre", "Randonnée")
+                    # Try to get access info from programme
+                    prog = entry.get("programme", [])
+                    rando_acces = ""
+                    if isinstance(prog, list):
+                        for item in prog:
+                            if isinstance(item, dict):
+                                dep = item.get("deplacement", "") or item.get("deplacement_vers_depart", "")
+                                if dep:
+                                    rando_acces = dep
+                                    break
+                    randonnee = {"nom": rando_name, "acces": rando_acces}
+                    break
+    if not randonnee:
+        # Look in programme items (Santa Monica)
+        for entry in data.get("programme", []):
+            if isinstance(entry, dict) and entry.get("type") == "randonnee":
+                randonnee = {
+                    "nom": entry.get("activite", "Randonnée"),
+                    "acces": entry.get("deplacement", entry.get("description", "")),
+                }
+                break
+    if not randonnee:
+        # Check dedicated field (Norvège: activite_randonnee_details)
+        rando_details = data.get("activite_randonnee_details")
+        if isinstance(rando_details, dict):
+            randonnee = {
+                "nom": rando_details.get("nom", "Randonnée"),
+                "acces": rando_details.get("deplacement_vers_depart", {}).get("moyen", ""),
+            }
 
-    # Season
-    periode = meta.get("periode", "")
-    saison = meta.get("climat_prevu", "")
+    # --- Season ---
+    saison = meta.get("climat_prevu", "") or meta.get("saison", "")
     if not saison:
-        # Try to infer from periode
+        # Try periode_recommandee (Norvège)
+        periode_rec = meta.get("periode_recommandee", {})
+        if isinstance(periode_rec, dict):
+            saison = periode_rec.get("raison", "")[:100] or periode_rec.get("fenetre", "")
+    if not saison:
+        periode = meta.get("periode", "")
         mois = meta.get("mois_vise", "").lower()
         if mois:
             mois_num = mois.split("-")[-1] if "-" in mois else ""
@@ -320,13 +491,39 @@ def normalize_proposition(data: dict, file_id: str) -> dict:
                           "06": "Été", "07": "Été", "08": "Été",
                           "09": "Automne", "10": "Automne", "11": "Automne"}
             saison = saison_map.get(mois_num, periode)
+        else:
+            saison = periode
+
+    # --- Duration ---
+    duree_jours = meta.get("duree_jours", 0)
+    if not duree_jours:
+        # Norvège: voyageur.duree_jours
+        voyageur = data.get("voyageur", {})
+        if isinstance(voyageur, dict):
+            duree_jours = voyageur.get("duree_jours", 0)
+    if not duree_jours:
+        duree_jours = data.get("duree_jours", 0)
+    # Santa Monica: metadata.duree is a string like "1 journée (08:00 - 22:00)"
+    if not duree_jours and meta.get("duree"):
+        duree_str = str(meta["duree"])
+        # Extract leading number
+        import re
+        m = re.match(r"(\d+)", duree_str)
+        if m:
+            duree_jours = int(m.group(1))
+
+    # --- Date ---
+    date = meta.get("date_creation", "") or meta.get("date", "") or data.get("date", "")
+
+    # --- ID ---
+    prop_id = data.get("id", meta.get("id", file_id))
 
     return {
-        "id": data.get("id", file_id),
-        "date": meta.get("date_creation", data.get("date", "")),
+        "id": prop_id,
+        "date": date,
         "destination": destination or "Destination inconnue",
         "pays": pays,
-        "duree_jours": meta.get("duree_jours", data.get("duree_jours", 0)),
+        "duree_jours": duree_jours,
         "transport": transport_summary or "?",
         "hebergement": hebergement_summary or "?",
         "activites": unique_activites,
@@ -1452,7 +1649,73 @@ def _extract_map_points(prop: dict) -> list[dict]:
                     "index": i,
                 })
             return points
-        # If programme has no positions, fall through to schema 3 (itineraires) or 2 (activites)
+        # If programme has no positions, fall through to schema 1b/3/2
+
+    # Schema 1b: "activites" as list of day objects (Norvège) — each day has titre + programme
+    if not points and "activites" in prop and isinstance(prop["activites"], list):
+        has_day_objects = any(
+            isinstance(entry, dict) and (entry.get("programme") or entry.get("titre"))
+            for entry in prop["activites"]
+        )
+        if has_day_objects:
+            destination = _get_display_destination(prop)
+            # First point: destination
+            if destination:
+                points.append({
+                    "label": f"📍 {destination}",
+                    "address": destination,
+                    "type": "default",
+                    "heure": "",
+                    "cout": "",
+                    "description": "",
+                    "index": 0,
+                })
+            for entry in prop["activites"]:
+                if not isinstance(entry, dict):
+                    continue
+                titre_jour = entry.get("titre", f"Jour {entry.get('jour', '?')}")
+                prog = entry.get("programme", [])
+                # programme can be a list (most days) or a dict (Norvège J5)
+                prog_items = []
+                if isinstance(prog, list):
+                    prog_items = prog
+                elif isinstance(prog, dict):
+                    # journee is a list, soiree_nuit may be a dict or a list
+                    j = prog.get("journee", [])
+                    if isinstance(j, list):
+                        prog_items.extend(j)
+                    elif isinstance(j, dict):
+                        prog_items.append(j)
+                    s = prog.get("soiree_nuit", [])
+                    if isinstance(s, list):
+                        prog_items.extend(s)
+                    elif isinstance(s, dict):
+                        prog_items.append(s)
+                for item in prog_items:
+                    if not isinstance(item, dict):
+                        continue
+                    act_text = item.get("activite", "")
+                    if not act_text or not act_text.strip():
+                        continue
+                    # Try to find a location in the deplacement field or use activity text
+                    deplacement = (item.get("deplacement", "") or
+                                   item.get("deplacement_vers_depart", "") or
+                                   item.get("note_deplacement", ""))
+                    if deplacement:
+                        location_query = f"{deplacement}, {destination}" if destination else deplacement
+                    else:
+                        location_query = f"{act_text[:100]}, {destination}" if destination else act_text[:100]
+                    points.append({
+                        "label": f"[{titre_jour}] {act_text[:80]}",
+                        "address": location_query,
+                        "type": _infer_activity_type(act_text),
+                        "heure": item.get("heure", ""),
+                        "cout": str(item.get("cout_eur", item.get("cost_eur", ""))),
+                        "description": "",
+                        "index": len(points),
+                    })
+            if points:
+                return points
 
     # Schema 3: "itineraires" (day-by-day with matin/apres_midi/soir, no positions)
     if "itineraires" in prop and isinstance(prop["itineraires"], list):

@@ -51,7 +51,11 @@ async function openMapModal(propId, destination, pays) {
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
             maxZoom: 19,
+            crossOrigin: true,
         }).addTo(leafletMap);
+        // Force a size invalidation after initialization — the container may
+        // have had zero dimensions when Leaflet first measured it.
+        setTimeout(function() { leafletMap.invalidateSize(); }, 50);
     } else {
         // Clear previous markers and polyline
         mapMarkers.forEach(function(m) { leafletMap.removeLayer(m); });
@@ -61,6 +65,8 @@ async function openMapModal(propId, destination, pays) {
             mapPolyline = null;
         }
     }
+    // Always invalidate size when opening — the modal may have been hidden
+    setTimeout(function() { leafletMap.invalidateSize(); }, 50);
 
     // Fetch geocoded map data from API
     try {
@@ -136,6 +142,7 @@ async function openMapModal(propId, destination, pays) {
 
         // Ensure map renders correctly after modal opens
         setTimeout(function() { leafletMap.invalidateSize(); }, 100);
+        setTimeout(function() { leafletMap.invalidateSize(); }, 500);
 
         // Show info about geocoding results
         if (data.failed > 0) {
