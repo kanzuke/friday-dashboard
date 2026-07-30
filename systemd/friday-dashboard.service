@@ -1,0 +1,18 @@
+[Unit]
+Description=Hermes Unified Dashboard - Home + Voyages + Immo + Vehicules + Chat vocal
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hermes-dashboard
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python3 app.py
+Restart=on-failure
+RestartSec=5
+Environment=HOME=/root
+Environment=DASHBOARD_HOST=10.245.243.1
+Environment=DASHBOARD_PORT=9120
+Environment=DASHBOARD_USER=mathieu
+Environment=DASHBOARD_PASS=toto
+
+[Install]
+WantedBy=multi-user.target

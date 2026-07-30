@@ -1,0 +1,1672 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hermes Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Leaflet.js for interactive maps (OpenStreetMap, free, no API key) -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tG/m+9ZcL2nuPyWp89mUoI=" crossorigin="">
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+    <style>
+        body { background: #0f172a; }
+        .sidebar { background: #1e293b; transition: width 0.3s; }
+        .nav-item { transition: all 0.15s; cursor: pointer; }
+        .nav-item:hover { background: #334155; }
+        .nav-item.active { background: #0ea5e9; color: white; }
+        .card { background: #1e293b; transition: all 0.2s; }
+        .card:hover { transform: translateY(-2px); box-shadow: 0 8px 25px rgba(0,0,0,0.3); }
+        .badge { font-size: 0.75rem; padding: 2px 10px; border-radius: 9999px; font-weight: 600; }
+        .badge-validate { background: #16a34a; color: white; }
+        .badge-reorient { background: #ea580c; color: white; }
+        .badge-refuse { background: #dc2626; color: white; }
+        .badge-revision { background: #2563eb; color: white; }
+        .badge-archived { background: #6b7280; color: #e2e8f0; }
+        .badge-pending { background: #475569; color: #cbd5e1; }
+        .badge-active { background: #16a34a; color: white; }
+        .badge-inactive { background: #dc2626; color: white; }
+        .fade-in { animation: fadeIn 0.3s ease-in; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .comment-box { max-height: 200px; overflow-y: auto; }
+        .comment-box::-webkit-scrollbar { width: 4px; }
+        .comment-box::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
+        .comment-mathieu { border-left: 3px solid #0ea5e9; }
+        .comment-travely { border-left: 3px solid #f59e0b; background: rgba(120, 53, 15, 0.3); }
+        .travely-indicator { animation: pulse-soft 1.5s ease-in-out infinite; }
+        @keyframes pulse-soft { 0%,100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .activity-image { width: 100%; height: 120px; object-fit: cover; border-radius: 8px; }
+        .activity-link { display: inline-flex; align-items: center; gap: 4px; font-size: 0.75rem; color: #38bdf8; text-decoration: none; }
+        .activity-link:hover { text-decoration: underline; }
+        .activity-card { background: #0f172a; border: 1px solid #334155; border-radius: 10px; overflow: hidden; }
+        .img-placeholder { display: flex; align-items: center; justify-content: center; height: 120px; background: #1e293b; border-radius: 8px; color: #475569; font-size: 0.8rem; }
+        .chat-message { animation: fadeIn 0.2s ease-in; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        .status-green { background: #22c55e; }
+        .status-red { background: #ef4444; }
+        .status-gray { background: #64748b; }
+        .recording { animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+        .voice-card { transition: all 0.2s; cursor: pointer; }
+        .voice-card.selected { border-color: #0ea5e9; background: #0c4a6e; }
+        /* Map modal */
+        .map-overlay { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,0.7); display: flex; align-items: center; justify-content: center; }
+        .map-modal { background: #1e293b; border-radius: 16px; border: 1px solid #334155; width: 95vw; max-width: 1000px; height: 85vh; display: flex; flex-direction: column; overflow: hidden; }
+        .map-modal-header { display: flex; align-items: center; justify-content: space-between; padding: 16px 20px; border-bottom: 1px solid #334155; }
+        .map-modal-body { flex: 1; position: relative; overflow: hidden; }
+        #leaflet-map { width: 100%; height: 100%; background: #0f172a; }
+        .map-loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; color: #94a3b8; background: #0f172a; z-index: 10; }
+        .map-legend { position: absolute; bottom: 10px; right: 10px; z-index: 1000; background: rgba(30,41,59,0.95); border: 1px solid #334155; border-radius: 8px; padding: 10px 14px; font-size: 0.75rem; color: #cbd5e1; }
+        .map-legend-item { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
+        .map-legend-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        /* Dark theme for Leaflet popups */
+        .leaflet-popup-content-wrapper { background: #1e293b; color: #e2e8f0; border-radius: 8px; }
+        .leaflet-popup-tip { background: #1e293b; }
+        .leaflet-popup-content { margin: 12px 16px; font-size: 0.875rem; }
+        .leaflet-container a { color: #38bdf8; }
+        .leaflet-control-zoom a { background: #1e293b !important; color: #e2e8f0 !important; border-color: #334155 !important; }
+        .leaflet-control-zoom a:hover { background: #334155 !important; }
+        .leaflet-bar { border-color: #334155 !important; }
+        /* --- Responsive sidebar --- */
+        .sidebar { z-index: 50; }
+        /* Mobile: sidebar hidden by default, slides in */
+        @media (max-width: 767px) {
+            .sidebar {
+                position: fixed;
+                left: 0; top: 0; bottom: 0;
+                width: 16rem;
+                transform: translateX(-100%);
+                transition: transform 0.3s ease;
+            }
+            .sidebar.open { transform: translateX(0); }
+            .sidebar-backdrop {
+                position: fixed; inset: 0; z-index: 49;
+                background: rgba(0,0,0,0.5);
+                opacity: 0; pointer-events: none;
+                transition: opacity 0.3s ease;
+            }
+            .sidebar-backdrop.open { opacity: 1; pointer-events: auto; }
+            .mobile-header { display: flex; }
+        }
+        @media (min-width: 768px) {
+            .sidebar { transform: translateX(0) !important; }
+            .sidebar-backdrop { display: none !important; }
+            .mobile-header { display: none !important; }
+        }
+        .mobile-header {
+            display: none;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 16px;
+            background: #1e293b;
+            border-bottom: 1px solid #334155;
+            position: sticky; top: 0; z-index: 40;
+        }
+        .hamburger-btn {
+            background: none; border: none; color: #e2e8f0;
+            font-size: 1.5rem; cursor: pointer; padding: 4px 8px;
+            line-height: 1;
+        }
+        /* AdventureLog button states */
+        .al-btn { font-size: 0.7rem; padding: 3px 10px; border-radius: 8px;
+                  font-weight: 600; transition: all 0.2s; cursor: pointer;
+                  display: inline-flex; align-items: center; gap: 4px; }
+        .al-btn-default { background: #155e75; color: #67e8f9; border: 1px solid #0e7490; }
+        .al-btn-default:hover { background: #0c4a6e; }
+        .al-btn-added { background: #14532d; color: #86efac; border: 1px solid #166534; cursor: default; }
+        .al-btn-loading { background: #374151; color: #9ca3af; border: 1px solid #4b5563; cursor: wait; }
+        .al-btn-error { background: #7f1d1d; color: #fca5a5; border: 1px solid #991b1b; }
+    </style>
+</head>
+<body class="text-slate-100 min-h-screen">
+
+    <div class="flex h-screen overflow-hidden">
+        <!-- Mobile hamburger header -->
+        <div class="mobile-header">
+            <button class="hamburger-btn" onclick="toggleSidebar()" id="hamburger-btn">☰</button>
+            <div class="flex items-center gap-2">
+                <span class="text-2xl">⚡</span>
+                <h1 class="text-lg font-bold text-sky-400">Hermes</h1>
+            </div>
+        </div>
+
+        <!-- Backdrop for mobile sidebar -->
+        <div class="sidebar-backdrop" id="sidebar-backdrop" onclick="closeSidebar()"></div>
+
+        <!-- Sidebar (sticky/fixed: stays visible while main content scrolls) -->
+        <aside class="sidebar w-64 flex-shrink-0 border-r border-slate-700 flex flex-col h-screen sticky top-0" id="sidebar">
+            <div class="p-4 border-b border-slate-700">
+                <div class="flex items-center gap-3">
+                    <span class="text-3xl">⚡</span>
+                    <div>
+                        <h1 class="text-lg font-bold text-sky-400">Hermes</h1>
+                        <p class="text-xs text-slate-400">Dashboard unifié</p>
+                    </div>
+                </div>
+            </div>
+            <nav class="flex-1 py-4">
+                <div class="nav-item active flex items-center gap-3 px-4 py-3 text-sm" onclick="navigate('home')" id="nav-home">
+                    <span class="text-xl">🏠</span> <span>Home</span>
+                </div>
+                <div class="nav-item flex items-center gap-3 px-4 py-3 text-sm" onclick="navigate('voyages')" id="nav-voyages">
+                    <span class="text-xl">✈️</span> <span>Voyages</span>
+                </div>
+                <div class="nav-item flex items-center gap-3 px-4 py-3 text-sm" onclick="navigate('immo')" id="nav-immo">
+                    <span class="text-xl">🏡</span> <span>Immobilier</span>
+                </div>
+                <div class="nav-item flex items-center gap-3 px-4 py-3 text-sm" onclick="navigate('vehicules')" id="nav-vehicules">
+                    <span class="text-xl">🚗</span> <span>Véhicules</span>
+                </div>
+                <div class="nav-item flex items-center gap-3 px-4 py-3 text-sm" onclick="navigate('chat')" id="nav-chat">
+                    <span class="text-xl">💬</span> <span>Chat avec Friday</span>
+                </div>
+                <div class="nav-item flex items-center gap-3 px-4 py-3 text-sm" onclick="navigate('settings')" id="nav-settings">
+                    <span class="text-xl">⚙️</span> <span>Paramètres</span>
+                </div>
+            </nav>
+            <div class="p-4 border-t border-slate-700 text-xs text-slate-500">
+                <div id="sidebar-status">Chargement...</div>
+            </div>
+        </aside>
+
+        <!-- Main content (scrollable, sidebar stays fixed) -->
+        <main class="flex-1 overflow-y-auto h-screen flex flex-col">
+            <!-- HOME PAGE -->
+            <div id="page-home" class="page p-4 md:p-6">
+                <h2 class="text-2xl font-bold text-sky-400 mb-6">Statut du système</h2>
+                <div id="home-content">
+                    <div class="text-center py-20 text-slate-400">
+                        <div class="animate-spin inline-block w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full mb-3"></div>
+                        <p>Chargement du statut...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VOYAGES PAGE -->
+            <div id="page-voyages" class="page p-4 md:p-6 hidden">
+                <div class="flex items-center justify-between mb-6">
+                    <h2 class="text-2xl font-bold text-sky-400">Propositions de voyage</h2>
+                    <div id="voyages-stats" class="text-sm text-slate-400"></div>
+                </div>
+                <!-- Filter bar -->
+                <div class="flex items-center gap-3 mb-6 flex-wrap">
+                    <span class="text-sm text-slate-500">Filtrer:</span>
+                    <select id="voyages-filter" onchange="applyVoyagesFilter()"
+                        class="bg-slate-800 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-200 focus:border-sky-500 focus:outline-none flex-1 sm:flex-none sm:min-w-[200px]">
+                        <option value="active">En cours + Validées</option>
+                        <option value="en_cours">En cours seulement</option>
+                        <option value="validee">Validées</option>
+                        <option value="reorientee">Réorientées</option>
+                        <option value="en_revision">En révision</option>
+                        <option value="refusee">Refusées</option>
+                        <option value="archivee">Archivées</option>
+                        <option value="toutes">Toutes</option>
+                    </select>
+                    <span id="voyages-filter-count" class="text-xs text-slate-500"></span>
+                </div>
+                <div id="voyages-loading" class="text-center py-20 text-slate-400">
+                    <div class="animate-spin inline-block w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full mb-3"></div>
+                    <p>Chargement des propositions...</p>
+                </div>
+                <div id="voyages-empty" class="hidden text-center py-20">
+                    <span class="text-5xl">📭</span>
+                    <p class="text-slate-400 mt-4">Aucune proposition pour le moment.</p>
+                </div>
+                <div id="voyages-list" class="grid gap-6 md:grid-cols-2 lg:grid-cols-3"></div>
+            </div>
+
+            <!-- IMMO PAGE -->
+            <div id="page-immo" class="page p-4 md:p-6 hidden">
+                <h2 class="text-2xl font-bold text-sky-400 mb-6">Annonces immobilières (Findy)</h2>
+                <div id="immo-content">
+                    <div class="text-center py-20 text-slate-400">
+                        <div class="animate-spin inline-block w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full mb-3"></div>
+                        <p>Chargement des annonces...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- VEHICULES PAGE -->
+            <div id="page-vehicules" class="page p-4 md:p-6 hidden">
+                <h2 class="text-2xl font-bold text-sky-400 mb-6">Annonces véhicules (Spoty)</h2>
+                <div id="vehicules-content">
+                    <div class="text-center py-20 text-slate-400">
+                        <div class="animate-spin inline-block w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full mb-3"></div>
+                        <p>Chargement des annonces...</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- CHAT PAGE -->
+            <div id="page-chat" class="page p-4 md:p-6 hidden flex flex-col h-full flex-1">
+                <div class="flex items-center justify-between mb-4">
+                    <h2 class="text-2xl font-bold text-sky-400">Chat avec Friday</h2>
+                    <button onclick="clearChatHistory()" class="text-xs text-slate-500 hover:text-red-400 transition px-3 py-1.5 border border-slate-700 hover:border-red-700 rounded-lg">🗑️ Effacer l'historique</button>
+                </div>
+                <div id="chat-messages" class="flex-1 overflow-y-auto space-y-4 mb-4 bg-slate-900 rounded-xl border border-slate-700 p-4" style="min-height: 300px;">
+                    <div class="text-center text-slate-500 py-8">
+                        <span class="text-4xl">🌟</span>
+                        <p class="mt-2">Bonjour Mathieu ! Je suis Friday, votre coordinatrice. Comment puis-je vous aider ?</p>
+                    </div>
+                </div>
+                <div class="flex gap-2 items-end">
+                    <button id="mic-btn" onclick="toggleRecording()" class="bg-slate-700 hover:bg-slate-600 text-white p-3 rounded-xl transition" title="Input vocal">
+                        <span id="mic-icon">🎤</span>
+                    </button>
+                    <textarea id="chat-input" placeholder="Écrivez un message à Friday..." rows="1"
+                        class="flex-1 resize-none bg-slate-900 border border-slate-700 rounded-xl px-4 py-3 text-sm text-slate-100 focus:border-sky-500 focus:outline-none overflow-hidden"
+                        style="min-height: 48px; max-height: 200px;"
+                        onkeydown="handleChatKeydown(event)"
+                        oninput="autoResizeChatInput()"></textarea>
+                    <button onclick="sendChat()" class="bg-sky-700 hover:bg-sky-600 text-white px-5 py-3 rounded-xl transition font-semibold">
+                        ➤
+                    </button>
+                </div>
+                <div id="chat-recording" class="hidden mt-2 text-sm text-red-400 recording">
+                    🔴 Écoute en cours... Parlez maintenant. Cliquez sur le micro pour arrêter.
+                </div>
+            </div>
+
+            <!-- SETTINGS PAGE -->
+            <div id="page-settings" class="page p-4 md:p-6 hidden">
+                <h2 class="text-2xl font-bold text-sky-400 mb-6">Paramètres</h2>
+                <div class="card rounded-2xl border border-slate-700 p-6 mb-6">
+                    <h3 class="text-lg font-semibold text-slate-200 mb-4">🎙️ Voix de Friday (TTS)</h3>
+                    <p class="text-sm text-slate-400 mb-4">Choisissez la voix utilisée pour la synthèse vocale.</p>
+                    <div id="voice-list" class="grid gap-3 md:grid-cols-2">
+                        <div class="text-slate-400 text-sm">Chargement des voix...</div>
+                    </div>
+                </div>
+                <div class="card rounded-2xl border border-slate-700 p-6">
+                    <h3 class="text-lg font-semibold text-slate-200 mb-4">ℹ️ Informations</h3>
+                    <div class="text-sm text-slate-400 space-y-2">
+                        <p><span class="text-slate-500">Dashboard version:</span> 1.0.0</p>
+                        <p><span class="text-slate-500">Backend:</span> FastAPI + Python</p>
+                        <p><span class="text-slate-500">TTS:</span> edge-tts (Microsoft Edge)</p>
+                        <p><span class="text-slate-500">STT:</span> faster-whisper (local)</p>
+                        <p><span class="text-slate-500">Bind:</span> 10.245.243.1:9120 (ZeroTier)</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="fixed bottom-6 right-6 hidden bg-slate-800 border border-slate-600 text-slate-100 px-4 py-3 rounded-lg shadow-xl z-50 max-w-[90vw]"></div>
+
+    <!-- Audio player (hidden) -->
+    <audio id="audio-player" class="hidden"></audio>
+
+    <!-- Map modal for Travely propositions -->
+    <div id="map-overlay" class="map-overlay hidden">
+        <div class="map-modal">
+            <div class="map-modal-header">
+                <div>
+                    <h3 id="map-modal-title" class="text-lg font-bold text-sky-300">Carte du voyage</h3>
+                    <p id="map-modal-subtitle" class="text-xs text-slate-500"></p>
+                </div>
+                <button onclick="closeMapModal()" class="text-slate-400 hover:text-red-400 text-2xl px-3 leading-none">&times;</button>
+            </div>
+            <div class="map-modal-body">
+                <div id="map-loading" class="map-loading">
+                    <div class="animate-spin w-8 h-8 border-2 border-sky-500 border-t-transparent rounded-full mb-3"></div>
+                    <p>Géocodage des points en cours...</p>
+                    <p class="text-xs text-slate-600 mt-1">Peut prendre quelques secondes (Nominatim, limité à 1 req/sec)</p>
+                </div>
+                <div id="leaflet-map"></div>
+                <div id="map-legend" class="map-legend hidden"></div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API = '/api';
+        let currentPage = 'home';
+        let propositions = [];
+        let voices = [];
+        let currentVoice = '';
+        let chatBusy = false;
+
+        // --- Navigation ---
+
+        function toggleSidebar() {
+            const sidebar = document.getElementById('sidebar');
+            const backdrop = document.getElementById('sidebar-backdrop');
+            sidebar.classList.toggle('open');
+            backdrop.classList.toggle('open');
+        }
+
+        function closeSidebar() {
+            document.getElementById('sidebar').classList.remove('open');
+            document.getElementById('sidebar-backdrop').classList.remove('open');
+        }
+
+        function navigate(page) {
+            currentPage = page;
+            document.querySelectorAll('.page').forEach(p => p.classList.add('hidden'));
+            document.getElementById(`page-${page}`).classList.remove('hidden');
+            document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
+            document.getElementById(`nav-${page}`).classList.add('active');
+
+            if (page === 'home') loadStatus();
+            if (page === 'voyages') loadPropositions();
+            if (page === 'immo') loadImmo();
+            if (page === 'vehicules') loadVehicules();
+            if (page === 'chat') { loadChatHistory(); }
+            if (page === 'settings') loadSettings();
+            // Close sidebar on mobile after navigation
+            closeSidebar();
+        }
+
+        // --- Helpers ---
+
+        function showToast(msg, type = 'info') {
+            const toast = document.getElementById('toast');
+            const colors = { info: 'border-slate-600', success: 'border-green-600', error: 'border-red-600' };
+            toast.className = `fixed bottom-6 right-6 bg-slate-800 border ${colors[type]} text-slate-100 px-4 py-3 rounded-lg shadow-xl z-50 fade-in`;
+            toast.textContent = msg;
+            toast.classList.remove('hidden');
+            setTimeout(() => toast.classList.add('hidden'), 3000);
+        }
+
+        function escapeHtml(text) {
+            if (text == null) return '';
+            const div = document.createElement('div');
+            div.textContent = String(text);
+            return div.innerHTML;
+        }
+
+        function formatDate(iso) {
+            if (!iso) return '';
+            try {
+                const d = new Date(iso);
+                return d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
+            } catch { return iso; }
+        }
+
+        function formatDateTime(iso) {
+            if (!iso) return '';
+            try {
+                const d = new Date(iso);
+                return d.toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+            } catch { return iso; }
+        }
+
+        function actionBadge(feedback, statut) {
+            // Use statut if provided, otherwise infer from action
+            var s = statut || 'en_cours';
+            if (feedback && feedback.action === 'valider') s = 'validee';
+            if (feedback && feedback.action === 'refuser') s = 'refusee';
+            if (feedback && feedback.action === 'reorienter' && s !== 'en_revision') s = 'reorientee';
+
+            switch (s) {
+                case 'validee': return '<span class="badge badge-validate">✓ Validée</span>';
+                case 'refusee': return '<span class="badge badge-refuse">✕ Refusée</span>';
+                case 'reorientee': return '<span class="badge badge-reorient">↻ Réorientée</span>';
+                case 'en_revision': return '<span class="badge badge-revision">⚙️ En révision</span>';
+                case 'archivee': return '<span class="badge badge-archived">📦 Archivée</span>';
+                default: return '<span class="badge badge-pending">En attente</span>';
+            }
+        }
+
+        // --- HOME: System status ---
+
+        async function loadStatus() {
+            try {
+                const res = await fetch(`${API}/status`);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                renderStatus(data);
+            } catch (err) {
+                document.getElementById('home-content').innerHTML = `<div class="text-center py-20 text-red-400">Erreur: ${escapeHtml(err.message)}</div>`;
+            }
+        }
+
+        function renderStatus(data) {
+            const services = data.services || [];
+            const agents = data.agents || [];
+            const cronJobs = data.cron_jobs || [];
+
+            // Services
+            const servicesHtml = services.map(s => `
+                <div class="card rounded-xl border border-slate-700 p-4 flex items-center justify-between">
+                    <div>
+                        <p class="font-semibold text-slate-200">${escapeHtml(s.name)}</p>
+                        <p class="text-xs text-slate-500">Uptime: ${s.uptime || 'N/A'}</p>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <span class="status-dot ${s.active ? 'status-green' : 'status-red'}"></span>
+                        <span class="text-sm ${s.active ? 'text-green-400' : 'text-red-400'}">${s.active ? 'Actif' : 'Inactif'}</span>
+                    </div>
+                </div>
+            `).join('');
+
+            // Agents
+            const agentsHtml = agents.map(a => {
+                const gwStatus = a.gateway_running ? 'green' : 'gray';
+                const gwLabel = a.gateway_running ? 'En ligne' : 'Arrêté';
+                const cronInfo = a.last_cron ? `
+                    <p class="text-xs text-slate-500 mt-1">Dernier cron: ${escapeHtml(a.last_cron.name)} — ${a.last_cron.last_status || 'N/A'}</p>
+                    <p class="text-xs text-slate-500">Prochaine: ${formatDateTime(a.last_cron.next_run_at)}</p>
+                ` : '<p class="text-xs text-slate-500 mt-1">Aucun cron</p>';
+                const kanbanInfo = a.kanban_total > 0 ? `${a.kanban_running} running, ${a.kanban_ready} ready` : 'Aucune tâche';
+
+                return `
+                    <div class="card rounded-xl border border-slate-700 p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="flex items-center gap-3">
+                                <span class="text-2xl">${a.icon}</span>
+                                <div>
+                                    <p class="font-semibold text-slate-200">${escapeHtml(a.name)}</p>
+                                    <p class="text-xs text-slate-500">${escapeHtml(a.role)} · profil: ${escapeHtml(a.profile)}</p>
+                                </div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <span class="status-dot status-${gwStatus}"></span>
+                                <span class="text-sm text-slate-400">${gwLabel}</span>
+                            </div>
+                        </div>
+                        ${cronInfo}
+                        <div class="mt-2 flex items-center gap-2">
+                            <span class="text-xs text-slate-500">Kanban:</span>
+                            <span class="text-xs text-sky-400">${kanbanInfo}</span>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // Quick links
+            const quickLinks = `
+                <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+                    <div class="card rounded-xl border border-slate-700 p-4 text-center cursor-pointer hover:border-sky-500" onclick="navigate('voyages')">
+                        <span class="text-3xl">✈️</span>
+                        <p class="text-sm text-slate-300 mt-2">Voyages</p>
+                    </div>
+                    <div class="card rounded-xl border border-slate-700 p-4 text-center cursor-pointer hover:border-sky-500" onclick="navigate('immo')">
+                        <span class="text-3xl">🏡</span>
+                        <p class="text-sm text-slate-300 mt-2">Immobilier</p>
+                    </div>
+                    <div class="card rounded-xl border border-slate-700 p-4 text-center cursor-pointer hover:border-sky-500" onclick="navigate('vehicules')">
+                        <span class="text-3xl">🚗</span>
+                        <p class="text-sm text-slate-300 mt-2">Véhicules</p>
+                    </div>
+                    <div class="card rounded-xl border border-slate-700 p-4 text-center cursor-pointer hover:border-sky-500" onclick="navigate('chat')">
+                        <span class="text-3xl">💬</span>
+                        <p class="text-sm text-slate-300 mt-2">Chat Friday</p>
+                    </div>
+                </div>
+            `;
+
+            document.getElementById('home-content').innerHTML = `
+                ${quickLinks}
+                <h3 class="text-lg font-semibold text-slate-300 mb-3">Services systemd</h3>
+                <div class="grid gap-3 md:grid-cols-3 mb-6">${servicesHtml}</div>
+                <h3 class="text-lg font-semibold text-slate-300 mb-3">Agents</h3>
+                <div class="grid gap-3 md:grid-cols-2 lg:grid-cols-3">${agentsHtml}</div>
+            `;
+
+            // Update sidebar status
+            const allActive = services.every(s => s.active);
+            document.getElementById('sidebar-status').innerHTML = `
+                <span class="status-dot status-${allActive ? 'green' : 'red'}"></span>
+                ${allActive ? 'Tous les services actifs' : 'Service(s) inactif(s)'}
+                <br>Système: ${formatDateTime(data.timestamp)}
+            `;
+        }
+
+        // --- VOYAGES: Propositions ---
+
+        const enrichCache = new Map();
+        let voyagesFilter = 'active';  // default filter
+
+        function getPropStatus(prop) {
+            // Use the statut field from the API if available
+            if (prop.statut) return prop.statut;
+            // Fallback: infer from action
+            const action = prop.feedback?.action;
+            if (action === 'valider') return 'validees';
+            if (action === 'refuser') return 'refusees';
+            if (action === 'reorienter') return 'reorientees';
+            return 'en_cours';  // no action = pending/in progress
+        }
+
+        function filterPropositions(props, filter) {
+            if (filter === 'toutes') return props;
+            if (filter === 'active') return props.filter(p => {
+                const s = getPropStatus(p);
+                return s === 'en_cours' || s === 'validee' || s === 'reorientee' || s === 'en_revision';
+            });
+            return props.filter(p => getPropStatus(p) === filter);
+        }
+
+        function applyVoyagesFilter() {
+            const sel = document.getElementById('voyages-filter');
+            voyagesFilter = sel ? sel.value : 'active';
+            renderVoyages();
+        }
+
+        async function loadPropositions() {
+            try {
+                // Load AdventureLog names in parallel with propositions
+                await loadAdventureLogNames();
+                const res = await fetch(`${API}/propositions`);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                propositions = data.propositions || [];
+                renderVoyages();
+                // Auto-start polling if any proposition is en_revision
+                const hasRevision = propositions.some(p => p.statut === 'en_revision');
+                if (hasRevision && !revisionPollTimer) {
+                    startRevisionPolling();
+                }
+            } catch (err) {
+                document.getElementById('voyages-loading').innerHTML = `<div class="text-center py-20 text-red-400">Erreur: ${escapeHtml(err.message)}</div>`;
+            }
+        }
+
+        function renderVoyages() {
+            document.getElementById('voyages-loading').classList.add('hidden');
+            const container = document.getElementById('voyages-list');
+            const empty = document.getElementById('voyages-empty');
+
+            if (propositions.length === 0) {
+                empty.classList.remove('hidden');
+                document.getElementById('voyages-stats').textContent = '';
+                document.getElementById('voyages-filter-count').textContent = '';
+                return;
+            }
+            empty.classList.add('hidden');
+
+            // Stats: count all propositions regardless of filter
+            const validated = propositions.filter(p => p.statut === 'validee' || p.feedback?.action === 'valider').length;
+            const reoriented = propositions.filter(p => p.statut === 'reorientee' || (p.feedback?.action === 'reorienter' && !p.statut)).length;
+            const inRevision = propositions.filter(p => p.statut === 'en_revision').length;
+            const refused = propositions.filter(p => p.statut === 'refusee' || p.feedback?.action === 'refuser').length;
+            const archived = propositions.filter(p => p.statut === 'archivee').length;
+            const pending = propositions.length - validated - reoriented - inRevision - refused - archived;
+            document.getElementById('voyages-stats').innerHTML =
+                `<span class="text-green-400">${validated} validées</span> · ` +
+                `<span class="text-orange-400">${reoriented} réorientées</span>` +
+                (inRevision > 0 ? ` · <span class="text-blue-400">${inRevision} en révision</span>` : '') +
+                ` · <span class="text-red-400">${refused} refusées</span>` +
+                (archived > 0 ? ` · <span class="text-slate-500">${archived} archivées</span>` : '') +
+                ` · <span class="text-slate-400">${pending} en attente</span>`;
+
+            // Apply current filter
+            const filtered = filterPropositions(propositions, voyagesFilter);
+            document.getElementById('voyages-filter-count').textContent =
+                `${filtered.length} / ${propositions.length} affichée(s)`;
+
+            if (filtered.length === 0) {
+                container.innerHTML = '';
+                empty.classList.remove('hidden');
+                empty.querySelector('p').textContent = 'Aucune proposition dans cette catégorie.';
+                return;
+            }
+            empty.classList.add('hidden');
+
+            container.innerHTML = filtered.map(prop => renderCard(prop)).join('');
+            filtered.forEach(prop => enrichPropositionActivities(prop));
+        }
+
+        function renderCard(prop) {
+            const fb = prop.feedback || { comments: [], action: null, action_detail: null };
+            const commentsHtml = (fb.comments || []).map(c => {
+                const isTravely = (c.author === 'travely');
+                const authorLabel = isTravely ? '✈️ Travely' : '🧑 Mathieu';
+                const authorColor = isTravely ? 'text-amber-400' : 'text-sky-400';
+                const cardClass = isTravely ? 'comment-travely bg-amber-900/20' : 'comment-mathieu bg-slate-700/50';
+                const deleteBtn = isTravely ? '' : `<button onclick="handleDeleteComment('${c.feedback_id}')" class="text-red-400 hover:text-red-300 text-xs shrink-0">✕</button>`;
+                return `
+                <div class="${cardClass} rounded-lg px-3 py-2 text-sm" id="comment-${c.feedback_id}">
+                    <div class="flex justify-between items-start gap-2">
+                        <div class="flex-1">
+                            <p class="${authorColor} text-xs font-semibold mb-1">${authorLabel}</p>
+                            <p class="text-slate-200">${escapeHtml(c.text)}</p>
+                        </div>
+                        ${deleteBtn}
+                    </div>
+                    <p class="text-slate-500 text-xs mt-1">${formatDate(c.date)}</p>
+                </div>
+                `;
+            }).join('');
+
+            const activitesHtml = (prop.activites || []).map((a, i) =>
+                `<div class="activity-card p-2" id="activity-${prop.id}-${i}">
+                    <div class="flex items-start gap-2">
+                        <span class="text-sky-400 mt-0.5">▸</span>
+                        <div class="flex-1 min-w-0">
+                            <p class="text-sm text-slate-300 break-words">${escapeHtml(a)}</p>
+                            <div class="activity-images mt-2" id="activity-images-${prop.id}-${i}">
+                                <div class="img-placeholder">chargement...</div>
+                            </div>
+                            <div class="activity-links mt-1" id="activity-links-${prop.id}-${i}"></div>
+                            <div class="mt-1" id="al-btn-container-${prop.id}-${i}">
+                                <button class="al-btn al-btn-default" data-prop-id="${escapeHtml(prop.id)}" data-act-idx="${i}" data-act-name="${escapeHtml(a)}" onclick="addToAdventureLogFromBtn(this)" id="al-btn-${prop.id}-${i}">
+                                    📍 Ajouter à AdventureLog
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>`
+            ).join('');
+
+            const randonneeHtml = prop.randonnee ? `
+                <div class="bg-emerald-900/30 border border-emerald-700/40 rounded-lg px-3 py-2">
+                    <p class="text-emerald-400 text-xs font-semibold">🥾 Randonnée</p>
+                    <p class="text-sm text-slate-300">${escapeHtml(prop.randonnee.nom)}</p>
+                    <p class="text-xs text-slate-500">${escapeHtml(prop.randonnee.acces || '')}</p>
+                </div>
+            ` : '';
+
+            const actionButtons = fb.action || prop.statut === 'en_revision' ? `
+                <div class="flex items-center gap-2">
+                    ${actionBadge(fb, prop.statut)}
+                    ${prop.statut !== 'en_revision' ? `<button onclick="resetAction('${prop.id}')" class="text-xs text-slate-500 hover:text-slate-300 underline">réinitialiser</button>` : ''}
+                </div>
+            ` : `
+                <div class="flex gap-2 flex-wrap">
+                    <button onclick="handleValidate('${prop.id}')" class="flex-1 min-w-[80px] bg-green-700 hover:bg-green-600 text-white text-sm font-semibold py-2 px-3 rounded-lg transition">✓ Valider</button>
+                    <button onclick="toggleReorient('${prop.id}')" class="flex-1 min-w-[80px] bg-orange-700 hover:bg-orange-600 text-white text-sm font-semibold py-2 px-3 rounded-lg transition">↻ Réorienter</button>
+                    <button onclick="toggleRefuser('${prop.id}')" class="flex-1 min-w-[80px] bg-red-700 hover:bg-red-600 text-white text-sm font-semibold py-2 px-3 rounded-lg transition">✕ Refuser</button>
+                </div>
+            `;
+
+            const detailBox = fb.action && fb.action_detail ? `
+                <div class="rounded-lg px-3 py-2 mt-2 ${fb.action === 'reorienter' ? 'bg-orange-900/30 border border-orange-700/40' : 'bg-red-900/30 border border-red-700/40'}">
+                    <p class="${fb.action === 'reorienter' ? 'text-orange-400' : 'text-red-400'} text-xs font-semibold">
+                        ${fb.action === 'reorienter' ? 'Réorientation demandée' : 'Raison du refus'}
+                    </p>
+                    <p class="text-sm text-slate-300">${escapeHtml(fb.action_detail)}</p>
+                </div>
+            ` : '';
+
+            return `
+            <div class="card rounded-2xl border border-slate-700 overflow-hidden flex flex-col fade-in" id="card-${prop.id}">
+                <div class="p-5 flex-1">
+                    <div class="flex justify-between items-start mb-3">
+                        <div>
+                            <h2 class="text-lg font-bold text-sky-300">${escapeHtml(prop.destination || 'Destination inconnue')}</h2>
+                            <p class="text-xs text-slate-500">${escapeHtml(prop.pays || '')} · ${formatDate(prop.date)}</p>
+                        </div>
+                        ${actionBadge(fb, prop.statut)}
+                    </div>
+                    <div class="grid grid-cols-2 gap-2 mb-4">
+                        <div class="bg-slate-800/50 rounded-lg px-3 py-2">
+                            <p class="text-xs text-slate-500">Budget</p>
+                            <p class="text-sm font-semibold text-amber-400">${escapeHtml(prop.budget_total || '?')}</p>
+                        </div>
+                        <div class="bg-slate-800/50 rounded-lg px-3 py-2">
+                            <p class="text-xs text-slate-500">Durée</p>
+                            <p class="text-sm font-semibold text-sky-300">${prop.duree_jours || '?'} jours</p>
+                        </div>
+                        <div class="bg-slate-800/50 rounded-lg px-3 py-2">
+                            <p class="text-xs text-slate-500">Saison</p>
+                            <p class="text-sm text-slate-300">${escapeHtml(prop.saison || '?')}</p>
+                        </div>
+                        <div class="bg-slate-800/50 rounded-lg px-3 py-2">
+                            <p class="text-xs text-slate-500">Transport</p>
+                            <p class="text-sm text-slate-300">${escapeHtml(prop.transport || '?')}</p>
+                        </div>
+                    </div>
+                    <div class="mb-3">
+                        <p class="text-xs text-slate-500 mb-1">Hébergement</p>
+                        <p class="text-sm text-slate-300">${escapeHtml(prop.hebergement || '?')}</p>
+                    </div>
+                    <div class="mb-3">
+                        <p class="text-xs text-slate-500 mb-1">Activités</p>
+                        <div class="space-y-2">${activitesHtml}</div>
+                    </div>
+                    ${randonneeHtml}
+                    ${detailBox}
+                </div>
+                <div class="px-5 pb-3">
+                    <button onclick="openMapModal('${prop.id}', '${escapeHtml(prop.destination || 'Destination inconnue')}', '${escapeHtml(prop.pays || '')}')"
+                        class="w-full bg-slate-700 hover:bg-slate-600 text-sky-300 text-sm font-semibold py-2 px-3 rounded-lg transition flex items-center justify-center gap-2">
+                        🗺️ Voir sur la carte
+                    </button>
+                </div>
+                <div class="bg-slate-800/30 border-t border-slate-700 p-4">
+                    <p class="text-xs text-slate-500 mb-2 font-semibold">💬 Commentaires</p>
+                    <div id="travely-indicator-${prop.id}" class="hidden mb-2">
+                        <div class="travely-indicator flex items-center gap-2 bg-amber-900/30 border border-amber-700/40 rounded-lg px-3 py-2">
+                            <span class="text-amber-400 text-sm">✈️</span>
+                            <span class="text-amber-400 text-sm font-medium">Travely est en train de répondre...</span>
+                        </div>
+                    </div>
+                    <div class="comment-box space-y-2 mb-3">${commentsHtml || '<p class="text-xs text-slate-600">Aucun commentaire</p>'}</div>
+                    <div class="flex gap-2">
+                        <input type="text" id="comment-input-${prop.id}" placeholder="Ajouter un commentaire..."
+                            class="flex-1 bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:border-sky-500 focus:outline-none"
+                            onkeypress="if(event.key==='Enter') handleAddComment('${prop.id}')">
+                        <button onclick="handleAddComment('${prop.id}')" class="bg-sky-700 hover:bg-sky-600 text-white text-sm py-2 px-3 rounded-lg transition">➤</button>
+                    </div>
+                </div>
+                <div class="px-4 pb-4">
+                    ${actionButtons}
+                    <div id="reorient-form-${prop.id}" class="hidden mt-2">
+                        <textarea id="reorient-text-${prop.id}" placeholder="Expliquez ce que vous souhaitez..."
+                            class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:border-orange-500 focus:outline-none" rows="2"></textarea>
+                        <div class="flex gap-2 mt-2">
+                            <button onclick="handleReorient('${prop.id}')" class="flex-1 bg-orange-600 hover:bg-orange-500 text-white text-sm font-semibold py-2 px-3 rounded-lg transition">Confirmer</button>
+                            <button onclick="toggleReorient('${prop.id}')" class="px-3 py-2 text-sm text-slate-400 hover:text-slate-200 rounded-lg">Annuler</button>
+                        </div>
+                    </div>
+                    <div id="refuser-form-${prop.id}" class="hidden mt-2">
+                        <textarea id="refuser-text-${prop.id}" placeholder="Raison du refus (obligatoire)..."
+                            class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-sm text-slate-100 focus:border-red-500 focus:outline-none" rows="2"></textarea>
+                        <div class="flex gap-2 mt-2">
+                            <button onclick="handleRefuser('${prop.id}')" class="flex-1 bg-red-600 hover:bg-red-500 text-white text-sm font-semibold py-2 px-3 rounded-lg transition">Confirmer le refus</button>
+                            <button onclick="toggleRefuser('${prop.id}')" class="px-3 py-2 text-sm text-slate-400 hover:text-slate-200 rounded-lg">Annuler</button>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        // --- Enrichment ---
+
+        async function enrichActivity(query) {
+            if (enrichCache.has(query)) return enrichCache.get(query);
+            try {
+                const res = await fetch(`${API}/enrich`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ query })
+                });
+                if (!res.ok) throw new Error('enrich failed');
+                const data = await res.json();
+                enrichCache.set(query, data);
+                return data;
+            } catch {
+                const fallback = { query, images: [], link: null };
+                enrichCache.set(query, fallback);
+                return fallback;
+            }
+        }
+
+        function renderActivityImages(propId, index, enrichData) {
+            const container = document.getElementById(`activity-images-${propId}-${index}`);
+            if (!container) return;
+            const images = enrichData.images || [];
+            if (images.length === 0) {
+                container.innerHTML = '<div class="img-placeholder">🖼️ Pas d\'image</div>';
+                return;
+            }
+            const imgsHtml = images.slice(0, 3).map(img => `
+                <img src="${escapeHtml(img.thumb_url)}" alt="${escapeHtml(img.title || '')}"
+                    class="activity-image" loading="lazy"
+                    title="${escapeHtml(img.title || '')}"
+                    onclick="window.open('${escapeHtml(img.url)}', '_blank')"
+                    style="cursor: pointer; max-width: 33%;"
+                    onerror="this.style.display='none'">
+            `).join('');
+            container.innerHTML = `<div class="flex gap-2">${imgsHtml}</div>`;
+        }
+
+        function renderActivityLinks(propId, index, enrichData) {
+            const container = document.getElementById(`activity-links-${propId}-${index}`);
+            if (!container) return;
+            const link = enrichData.link;
+            if (link) {
+                container.innerHTML = `<a href="${escapeHtml(link.url)}" target="_blank" rel="noopener noreferrer" class="activity-link">🔗 ${escapeHtml(link.title)} <span class="text-slate-500">(${escapeHtml(link.source)})</span></a>`;
+            } else {
+                container.innerHTML = '';
+            }
+        }
+
+        async function enrichPropositionActivities(prop) {
+            const activities = prop.activites || [];
+            for (let i = 0; i < activities.length; i++) {
+                // Check AdventureLog status
+                checkAdventureLogStatus(prop.id, i, activities[i]);
+                // Enrich with images and links
+                const enrichData = await enrichActivity(activities[i]);
+                renderActivityImages(prop.id, i, enrichData);
+                renderActivityLinks(prop.id, i, enrichData);
+            }
+        }
+
+        // --- Voyages event handlers ---
+
+        async function handleAddComment(propId) {
+            const input = document.getElementById(`comment-input-${propId}`);
+            const text = input.value.trim();
+            if (!text) return;
+            try {
+                await fetch(`${API}/comments`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposition_id: propId, text, author: 'mathieu' }) });
+                input.value = '';
+                await loadPropositions();
+                showToast('Commentaire ajouté — Travely va répondre...', 'success');
+                // Start polling for Travely comment response
+                startCommentPolling();
+            } catch (err) { showToast(err.message, 'error'); }
+        }
+
+        async function handleDeleteComment(commentId) {
+            try {
+                await fetch(`${API}/comments/${commentId}`, { method: 'DELETE' });
+                await loadPropositions();
+                showToast('Commentaire supprimé', 'success');
+            } catch (err) { showToast(err.message, 'error'); }
+        }
+
+        async function handleValidate(propId) {
+            try {
+                await fetch(`${API}/actions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposition_id: propId, action: 'valider' }) });
+                await loadPropositions();
+                showToast('Proposition validée ✓', 'success');
+            } catch (err) { showToast(err.message, 'error'); }
+        }
+
+        function toggleReorient(propId) {
+            document.getElementById(`refuser-form-${propId}`)?.classList.add('hidden');
+            const form = document.getElementById(`reorient-form-${propId}`);
+            form.classList.toggle('hidden');
+            if (!form.classList.contains('hidden')) document.getElementById(`reorient-text-${propId}`).focus();
+        }
+
+        async function handleReorient(propId) {
+            const text = document.getElementById(`reorient-text-${propId}`).value.trim();
+            if (!text) { showToast('Veuillez expliquer la réorientation', 'error'); return; }
+            try {
+                await fetch(`${API}/actions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposition_id: propId, action: 'reorienter', reorientation: text }) });
+                await loadPropositions();
+                showToast('Réorientation envoyée — Travely traite la demande...', 'success');
+                // Start polling for revision status
+                startRevisionPolling();
+            } catch (err) { showToast(err.message, 'error'); }
+        }
+
+        function toggleRefuser(propId) {
+            document.getElementById(`reorient-form-${propId}`)?.classList.add('hidden');
+            const form = document.getElementById(`refuser-form-${propId}`);
+            form.classList.toggle('hidden');
+            if (!form.classList.contains('hidden')) document.getElementById(`refuser-text-${propId}`).focus();
+        }
+
+        async function handleRefuser(propId) {
+            const text = document.getElementById(`refuser-text-${propId}`).value.trim();
+            if (!text) { showToast('La raison du refus est obligatoire', 'error'); return; }
+            try {
+                await fetch(`${API}/actions`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ proposition_id: propId, action: 'refuser', refus_raison: text }) });
+                await loadPropositions();
+                showToast('Proposition refusée', 'success');
+            } catch (err) { showToast(err.message, 'error'); }
+        }
+
+        async function resetAction(propId) {
+            try {
+                await fetch(`${API}/actions/${propId}`, { method: 'DELETE' });
+                await loadPropositions();
+                showToast('Action réinitialisée', 'info');
+            } catch (err) { showToast(err.message, 'error'); }
+        }
+
+        // --- Revision polling: auto-refresh when propositions are en_revision ---
+        let revisionPollTimer = null;
+
+        function startRevisionPolling() {
+            // Clear any existing timer
+            if (revisionPollTimer) clearInterval(revisionPollTimer);
+            // Poll every 10 seconds
+            revisionPollTimer = setInterval(async () => {
+                const hasRevision = propositions.some(p => p.statut === 'en_revision');
+                if (!hasRevision) {
+                    // No propositions in revision, stop polling
+                    clearInterval(revisionPollTimer);
+                    revisionPollTimer = null;
+                    return;
+                }
+                // Reload propositions to check if status changed
+                await loadPropositions();
+            }, 10000);
+        }
+
+        // --- Comment response polling: detect when Travely responds to comments ---
+        let commentPollTimer = null;
+        let commentPollProps = new Set();  // proposition IDs being polled
+
+        function startCommentPolling() {
+            // Clear any existing timer
+            if (commentPollTimer) clearInterval(commentPollTimer);
+            // Initial check
+            checkCommentStatuses();
+            // Poll every 5 seconds
+            commentPollTimer = setInterval(checkCommentStatuses, 5000);
+        }
+
+        async function checkCommentStatuses() {
+            // Check all visible propositions for comment response status
+            const props = propositions || [];
+            let anyProcessing = false;
+
+            for (const prop of props) {
+                try {
+                    const res = await fetch(`${API}/comment/status/${prop.id}`);
+                    if (!res.ok) continue;
+                    const data = await res.json();
+
+                    const indicator = document.getElementById(`travely-indicator-${prop.id}`);
+                    if (data.processing) {
+                        anyProcessing = true;
+                        if (indicator) indicator.classList.remove('hidden');
+                    } else {
+                        if (indicator) indicator.classList.add('hidden');
+                    }
+                } catch (err) {
+                    // Ignore errors for individual propositions
+                }
+            }
+
+            // If any proposition was being processed and now none are, reload propositions
+            // to show Travely's response comments
+            if (commentPollProps.size > 0 && !anyProcessing) {
+                commentPollProps.clear();
+                await loadPropositions();
+            }
+
+            // Track which props are being processed
+            for (const prop of props) {
+                const indicator = document.getElementById(`travely-indicator-${prop.id}`);
+                if (indicator && !indicator.classList.contains('hidden')) {
+                    commentPollProps.add(prop.id);
+                }
+            }
+
+            // Stop polling if nothing is being processed
+            if (!anyProcessing && commentPollProps.size === 0) {
+                clearInterval(commentPollTimer);
+                commentPollTimer = null;
+            }
+        }
+
+
+        // --- IMMO ---
+
+        async function loadImmo() {
+            try {
+                const res = await fetch(`${API}/immo`);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                renderImmo(data);
+            } catch (err) {
+                document.getElementById('immo-content').innerHTML = `<div class="text-center py-20 text-red-400">Erreur: ${escapeHtml(err.message)}</div>`;
+            }
+        }
+
+        function renderImmo(data) {
+            const annonces = data.annonces || [];
+            if (annonces.length === 0) {
+                document.getElementById('immo-content').innerHTML = `
+                    <div class="text-center py-20 text-slate-400">
+                        <span class="text-5xl">📭</span>
+                        <p class="mt-4">Aucune annonce immobilière pour le moment.</p>
+                        <p class="text-slate-500 text-sm mt-1">Findy ajoute les nouvelles annonces ici via Nextcloud Tables.</p>
+                    </div>`;
+                return;
+            }
+
+            // Rows are now flat dicts with column names as keys
+            const rows = annonces;
+            const statutLabels = { 0: 'Intéressant', 1: 'Contacté', 2: 'Visite', 3: 'Refusé', 4: 'Retenu' };
+            const statutColors = { 0: 'text-sky-400', 1: 'text-amber-400', 2: 'text-purple-400', 3: 'text-red-400', 4: 'text-green-400' };
+
+            const tableHtml = `
+                <div class="card rounded-2xl border border-slate-700 overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-slate-800 border-b border-slate-700">
+                            <tr>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Titre</th>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Prix</th>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Surface</th>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Statut</th>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Lien</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows.map(r => {
+                                const titre = r['Titre'] || r['titre'] || 'N/A';
+                                const prix = r['Prix'] || r['prix'] || 'N/A';
+                                const surface = r['Surface'] || r['surface'] || 'N/A';
+                                const statut = r['Statut'] != null ? r['Statut'] : 0;
+                                const url = r['URL'] || r['url'] || '';
+                                const statutLabel = statutLabels[statut] || String(statut);
+                                const statutColor = statutColors[statut] || 'text-slate-400';
+                                return `
+                                    <tr class="border-b border-slate-800 hover:bg-slate-800/50">
+                                        <td class="px-4 py-3 text-slate-200">${escapeHtml(titre)}</td>
+                                        <td class="px-4 py-3 text-amber-400 font-semibold">${escapeHtml(String(prix))} €</td>
+                                        <td class="px-4 py-3 text-sky-300">${escapeHtml(String(surface))} m²</td>
+                                        <td class="px-4 py-3 ${statutColor}">${statutLabel}</td>
+                                        <td class="px-4 py-3">${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline">Voir →</a>` : 'N/A'}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            document.getElementById('immo-content').innerHTML = `<p class="text-sm text-slate-400 mb-4">${data.count || 0} annonce(s) — ${data.source === 'local_cache' ? 'cache local' : 'Nextcloud direct'}${data.cached_at ? ` (maj: ${formatDateTime(data.cached_at)})` : ''}</p>${tableHtml}`;
+        }
+
+        // --- VEHICULES ---
+
+        async function loadVehicules() {
+            try {
+                const res = await fetch(`${API}/vehicules`);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                renderVehicules(data);
+            } catch (err) {
+                document.getElementById('vehicules-content').innerHTML = `<div class="text-center py-20 text-red-400">Erreur: ${escapeHtml(err.message)}</div>`;
+            }
+        }
+
+        function renderVehicules(data) {
+            const annonces = data.annonces || [];
+            if (annonces.length === 0) {
+                document.getElementById('vehicules-content').innerHTML = `
+                    <div class="text-center py-20 text-slate-400">
+                        <span class="text-5xl">📭</span>
+                        <p class="mt-4">Aucune annonce véhicule pour le moment.</p>
+                        <p class="text-slate-500 text-sm mt-1">Spoty ajoute les nouvelles annonces ici via Nextcloud Tables.</p>
+                    </div>`;
+                return;
+            }
+
+            const rows = annonces;
+
+            const tableHtml = `
+                <div class="card rounded-2xl border border-slate-700 overflow-x-auto">
+                    <table class="w-full text-sm">
+                        <thead class="bg-slate-800 border-b border-slate-700">
+                            <tr>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Marque/Modèle</th>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Année</th>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Km</th>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Prix</th>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Localisation</th>
+                                <th class="text-left px-4 py-3 text-slate-400 font-semibold">Lien</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${rows.map(r => {
+                                const titre = r['Marque-Modèle'] || r['Titre'] || r['titre'] || 'N/A';
+                                const annee = r['Année'] || r['annee'] || 'N/A';
+                                const km = r['Kilométrage'] || r['km'] || 'N/A';
+                                const prix = r['Prix'] || r['prix'] || 'N/A';
+                                const loc = r['Localisation'] || r['localisation'] || 'N/A';
+                                const url = r['URL'] || r['url'] || '';
+                                return `
+                                    <tr class="border-b border-slate-800 hover:bg-slate-800/50">
+                                        <td class="px-4 py-3 text-slate-200">${escapeHtml(titre)}</td>
+                                        <td class="px-4 py-3 text-sky-300">${escapeHtml(String(annee))}</td>
+                                        <td class="px-4 py-3 text-slate-300">${escapeHtml(String(km))} km</td>
+                                        <td class="px-4 py-3 text-amber-400 font-semibold">${escapeHtml(String(prix))} €</td>
+                                        <td class="px-4 py-3 text-slate-300">${escapeHtml(loc)}</td>
+                                        <td class="px-4 py-3">${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener" class="text-sky-400 hover:underline">Voir →</a>` : 'N/A'}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                </div>
+            `;
+            document.getElementById('vehicules-content').innerHTML = `<p class="text-sm text-slate-400 mb-4">${data.count || 0} annonce(s) — ${data.source === 'local_cache' ? 'cache local' : 'Nextcloud direct'}${data.cached_at ? ` (maj: ${formatDateTime(data.cached_at)})` : ''}</p>${tableHtml}`;
+        }
+
+        // --- CHAT ---
+
+        async function loadChatHistory() {
+            try {
+                const res = await fetch(`${API}/chat/history`);
+                if (!res.ok) return;
+                const data = await res.json();
+                const messages = data.messages || [];
+                if (messages.length === 0) return;
+                // Remove welcome message
+                const welcome = document.getElementById('chat-messages').querySelector('.text-center.text-slate-500');
+                if (welcome) welcome.remove();
+                messages.forEach(m => {
+                    const isUser = m.role === 'user';
+                    const avatar = isUser ? '👤' : '🌟';
+                    const bg = isUser ? 'bg-sky-900/30' : 'bg-slate-800';
+                    const align = isUser ? 'justify-end' : 'justify-start';
+                    const time = new Date(m.timestamp * 1000).toLocaleString('fr-FR', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
+                    const div = document.createElement('div');
+                    div.className = `chat-message flex ${align} gap-3`;
+                    const safeContent = escapeHtml(m.content).replace(/\n/g, '<br>');
+                    div.innerHTML = `
+                        ${!isUser ? `<span class="text-2xl shrink-0">${avatar}</span>` : ''}
+                        <div class="${bg} rounded-2xl px-4 py-3 max-w-[80%]">
+                            <p class="text-sm text-slate-100">${safeContent}</p>
+                            <p class="text-xs text-slate-500 mt-1">${time}</p>
+                        </div>
+                        ${isUser ? `<span class="text-2xl shrink-0">${avatar}</span>` : ''}
+                    `;
+                    document.getElementById('chat-messages').appendChild(div);
+                });
+                // Scroll to bottom
+                const container = document.getElementById('chat-messages');
+                container.scrollTop = container.scrollHeight;
+            } catch (err) {
+                console.error('Chat history load error:', err);
+            }
+        }
+
+        async function clearChatHistory() {
+            try {
+                await fetch(`${API}/chat/history`, { method: 'DELETE' });
+                document.getElementById('chat-messages').innerHTML = `
+                    <div class="text-center text-slate-500 py-8">
+                        <span class="text-4xl">🌟</span>
+                        <p class="mt-2">Historique effacé. Comment puis-je vous aider ?</p>
+                    </div>
+                `;
+                showToast('Historique effacé', 'success');
+            } catch (err) { showToast(err.message, 'error'); }
+        }
+
+        // --- Chat input: multiline handling ---
+
+        function autoResizeChatInput() {
+            const ta = document.getElementById('chat-input');
+            if (!ta) return;
+            ta.style.height = 'auto';
+            const newHeight = Math.min(ta.scrollHeight, 200);
+            ta.style.height = newHeight + 'px';
+        }
+
+        function handleChatKeydown(event) {
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                sendChat();
+            }
+            // Shift+Enter inserts a newline naturally (textarea default)
+        }
+
+        function resetChatInput() {
+            const ta = document.getElementById('chat-input');
+            if (!ta) return;
+            ta.value = '';
+            ta.style.height = 'auto';
+            ta.style.height = ta.style.minHeight || '48px';
+        }
+
+        async function sendChat() {
+            const input = document.getElementById('chat-input');
+            const text = input.value.trim();
+            if (!text || chatBusy) return;
+
+            chatBusy = true;
+            resetChatInput();
+
+            // Add user message
+            addChatMessage('user', text);
+
+            // Add loading indicator
+            const loadingId = addChatMessage('friday', '<span class="text-slate-500">Friday réfléchit...</span>');
+
+            try {
+                const res = await fetch(`${API}/chat`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text })
+                });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+
+                // Remove loading, add response
+                removeChatMessage(loadingId);
+                addChatMessage('friday', escapeHtml(data.response));
+
+                // Auto-play TTS if not an error
+                if (!data.error) {
+                    playTTS(data.response);
+                }
+            } catch (err) {
+                removeChatMessage(loadingId);
+                addChatMessage('friday', `Erreur: ${escapeHtml(err.message)}`);
+                showToast(err.message, 'error');
+            }
+
+            chatBusy = false;
+        }
+
+        function addChatMessage(role, content) {
+            const container = document.getElementById('chat-messages');
+            // Remove welcome message if present
+            const welcome = container.querySelector('.text-center.text-slate-500');
+            if (welcome) welcome.remove();
+
+            const id = 'msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 6);
+            const isUser = role === 'user';
+            const avatar = isUser ? '👤' : '🌟';
+            const bg = isUser ? 'bg-sky-900/30' : 'bg-slate-800';
+            const align = isUser ? 'justify-end' : 'justify-start';
+
+            const div = document.createElement('div');
+            div.id = id;
+            div.className = `chat-message flex ${align} gap-3`;
+            // Preserve newlines: escapeHtml then convert \n to <br>
+            const safeContent = escapeHtml(content).replace(/\n/g, '<br>');
+            div.innerHTML = `
+                ${!isUser ? `<span class="text-2xl shrink-0">${avatar}</span>` : ''}
+                <div class="${bg} rounded-2xl px-4 py-3 max-w-[80%]">
+                    <p class="text-sm text-slate-100">${safeContent}</p>
+                </div>
+                ${isUser ? `<span class="text-2xl shrink-0">${avatar}</span>` : ''}
+            `;
+            container.appendChild(div);
+            container.scrollTop = container.scrollHeight;
+            return id;
+        }
+
+        function removeChatMessage(id) {
+            const el = document.getElementById(id);
+            if (el) el.remove();
+        }
+
+        async function playTTS(text) {
+            try {
+                const res = await fetch(`${API}/tts`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ message: text })
+                });
+                if (!res.ok) return;
+                const data = await res.json();
+                if (data.audio) {
+                    const audio = document.getElementById('audio-player');
+                    audio.src = `data:audio/mpeg;base64,${data.audio}`;
+                    audio.play();
+                }
+            } catch (err) {
+                console.error('TTS error:', err);
+            }
+        }
+
+        // --- STT (Speech-to-Text) ---
+        // Strategy: prefer MediaRecorder + server-side Whisper (local, reliable on HTTPS).
+        // Fallback: Web Speech API (SpeechRecognition) if Whisper unavailable.
+        // The dashboard runs on HTTPS with a self-signed cert, so getUserMedia works.
+
+        let mediaRecorder = null;
+        let audioChunks = [];
+        let recognizing = false;
+        let recordTimer = null;
+        let recordSeconds = 0;
+        let recMode = null;  // 'whisper' or 'webspeech'
+        let stream = null;   // active MediaStream for cleanup
+
+        // Detect Web Speech API support (fallback method)
+        const SpeechRecognitionClass = window.SpeechRecognition || window.webkitSpeechRecognition;
+
+        async function toggleRecording() {
+            if (recognizing) {
+                await stopRecording();
+            } else {
+                await startRecording();
+            }
+        }
+
+        function updateRecTimer() {
+            const recEl = document.getElementById('chat-recording');
+            const m = Math.floor(recordSeconds / 60).toString().padStart(2, '0');
+            const s = (recordSeconds % 60).toString().padStart(2, '0');
+            recEl.innerHTML = `🔴 Enregistrement en cours... ${m}:${s} — Cliquez sur le micro pour arrêter.`;
+        }
+
+        // --- Method 1 (preferred): MediaRecorder + server-side Whisper ---
+        async function startMediaRecorder() {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({
+                    audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true }
+                });
+                // Pick a supported mime type
+                let mimeType = 'audio/webm';
+                if (!MediaRecorder.isTypeSupported(mimeType)) {
+                    mimeType = 'audio/ogg';
+                    if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = '';
+                }
+                mediaRecorder = mimeType
+                    ? new MediaRecorder(stream, { mimeType })
+                    : new MediaRecorder(stream);
+                audioChunks = [];
+                mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunks.push(e.data); };
+                mediaRecorder.onstop = handleWhisperTranscription;
+                mediaRecorder.start();
+                recMode = 'whisper';
+                recognizing = true;
+                recordSeconds = 0;
+                document.getElementById('mic-icon').textContent = '⏹';
+                document.getElementById('mic-btn').classList.add('recording');
+                document.getElementById('chat-recording').classList.remove('hidden');
+                updateRecTimer();
+                recordTimer = setInterval(() => { recordSeconds++; updateRecTimer(); }, 1000);
+                return true;
+            } catch (err) {
+                console.error('MediaRecorder start error:', err);
+                let msg = 'Erreur accès micro';
+                if (err.name === 'NotAllowedError') msg = 'Micro bloqué: autorisez l\'accès au micro (icône cadenas dans la barre d\'adresse)';
+                else if (err.name === 'NotFoundError') msg = 'Aucun microphone trouvé';
+                else if (err.name === 'NotReadableError') msg = 'Micro occupé par une autre application';
+                showToast(msg, 'error');
+                return false;
+            }
+        }
+
+        async function stopMediaRecorder() {
+            if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+                mediaRecorder.stop();
+            }
+            if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+            if (recordTimer) { clearInterval(recordTimer); recordTimer = null; }
+            resetMicUI();
+        }
+
+        async function handleWhisperTranscription() {
+            if (audioChunks.length === 0) {
+                showToast('Aucun audio enregistré', 'error');
+                return;
+            }
+            const blob = new Blob(audioChunks, { type: mediaRecorder.mimeType || 'audio/webm' });
+            // Show transcription in progress
+            document.getElementById('chat-recording').classList.remove('hidden');
+            document.getElementById('chat-recording').innerHTML = '⏳ Transcription en cours...';
+
+            try {
+                const formData = new FormData();
+                formData.append('file', blob, 'audio.webm');
+                const res = await fetch(`${API}/transcribe`, { method: 'POST', body: formData });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                if (data.error) {
+                    showToast('Erreur transcription: ' + data.error, 'error');
+                    document.getElementById('chat-recording').classList.add('hidden');
+                    return;
+                }
+                if (data.text && data.text.trim()) {
+                    document.getElementById('chat-input').value = data.text.trim();
+                    document.getElementById('chat-input').focus();
+                    showToast('Transcription: "' + data.text.substring(0, 60) + (data.text.length > 60 ? '...' : '"'), 'success');
+                    // Auto-send the transcribed message
+                    sendChat();
+                } else {
+                    showToast('Transcription vide — parlez plus fort ou plus près du micro', 'error');
+                }
+            } catch (err) {
+                console.error('Transcription error:', err);
+                showToast('Erreur transcription: ' + err.message, 'error');
+            }
+            document.getElementById('chat-recording').classList.add('hidden');
+        }
+
+        // --- Method 2 (fallback): Web Speech API (SpeechRecognition) ---
+        let speechRecognition = null;
+        function startSpeechRecognition() {
+            if (!SpeechRecognitionClass) return false;
+            speechRecognition = new SpeechRecognitionClass();
+            speechRecognition.lang = 'fr-FR';
+            speechRecognition.continuous = false;
+            speechRecognition.interimResults = true;
+            speechRecognition.maxAlternatives = 1;
+
+            speechRecognition.onstart = () => {
+                recMode = 'webspeech';
+                recognizing = true;
+                recordSeconds = 0;
+                document.getElementById('mic-icon').textContent = '⏹';
+                document.getElementById('mic-btn').classList.add('recording');
+                document.getElementById('chat-recording').classList.remove('hidden');
+                updateRecTimer();
+                recordTimer = setInterval(() => { recordSeconds++; updateRecTimer(); }, 1000);
+            };
+
+            speechRecognition.onresult = (event) => {
+                let interim = '', final = '';
+                for (let i = event.resultIndex; i < event.results.length; i++) {
+                    const transcript = event.results[i][0].transcript;
+                    if (event.results[i].isFinal) final += transcript;
+                    else interim += transcript;
+                }
+                const input = document.getElementById('chat-input');
+                if (final) input.value = final;
+                else if (interim) input.value = interim;
+            };
+
+            speechRecognition.onerror = (event) => {
+                console.error('SpeechRecognition error:', event.error);
+                let msg = 'Erreur reconnaissance vocale';
+                if (event.error === 'not-allowed' || event.error === 'service-not-allowed')
+                    msg = 'Micro bloqué: autorisez l\'accès au micro';
+                else if (event.error === 'no-speech') msg = 'Aucune parole détectée';
+                else if (event.error === 'audio-capture') msg = 'Aucun micro disponible';
+                else if (event.error === 'network') msg = 'Erreur réseau (reconnaissance vocale en ligne)';
+                showToast(msg, 'error');
+                resetMicUI();
+            };
+
+            speechRecognition.onend = () => {
+                if (recordTimer) { clearInterval(recordTimer); recordTimer = null; }
+                resetMicUI();
+                const input = document.getElementById('chat-input');
+                if (input.value.trim()) {
+                    input.focus();
+                    showToast('Parole reconnue, envoi...', 'success');
+                    sendChat();
+                }
+            };
+
+            try {
+                speechRecognition.start();
+                return true;
+            } catch (err) {
+                console.error('SpeechRecognition start error:', err);
+                return false;
+            }
+        }
+
+        function stopSpeechRecognition() {
+            if (speechRecognition && recognizing) speechRecognition.stop();
+            if (recordTimer) { clearInterval(recordTimer); recordTimer = null; }
+            resetMicUI();
+        }
+
+        function resetMicUI() {
+            recognizing = false;
+            document.getElementById('mic-icon').textContent = '🎤';
+            document.getElementById('mic-btn').classList.remove('recording');
+            // Don't hide chat-recording here — handleWhisperTranscription manages it
+            if (recMode !== 'whisper') {
+                document.getElementById('chat-recording').classList.add('hidden');
+            }
+        }
+
+        // --- Main entry: prefer MediaRecorder+Whisper (local, reliable on HTTPS) ---
+        // Fallback to Web Speech API if getUserMedia not available (e.g., non-secure context)
+        async function startRecording() {
+            // Method 1: MediaRecorder + Whisper (needs HTTPS or localhost)
+            if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                const started = await startMediaRecorder();
+                if (started) return;
+            }
+
+            // Method 2: Web Speech API (online, works on HTTP in Chrome/Edge)
+            if (SpeechRecognitionClass) {
+                const started = startSpeechRecognition();
+                if (started) return;
+            }
+
+            // Neither method worked
+            showToast('Micro indisponible: autorisez le micro ou utilisez Chrome/Edge', 'error');
+        }
+
+        async function stopRecording() {
+            if (recMode === 'whisper' && mediaRecorder && mediaRecorder.state !== 'inactive') {
+                await stopMediaRecorder();
+            } else if (recMode === 'webspeech' && recognizing) {
+                stopSpeechRecognition();
+            } else {
+                resetMicUI();
+            }
+        }
+
+        // --- SETTINGS ---
+
+        async function loadSettings() {
+            try {
+                const res = await fetch(`${API}/voices`);
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+                voices = data.voices || [];
+                currentVoice = data.current || (voices[0] && voices[0].id);
+                renderVoices();
+            } catch (err) {
+                document.getElementById('voice-list').innerHTML = `<div class="text-red-400">Erreur: ${escapeHtml(err.message)}</div>`;
+            }
+        }
+
+        function renderVoices() {
+            const list = document.getElementById('voice-list');
+            list.innerHTML = voices.map(v => `
+                <div class="voice-card card rounded-xl border border-slate-700 p-4 ${v.id === currentVoice ? 'selected' : ''}" onclick="selectVoice('${v.id}')">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <p class="font-semibold text-slate-200">${escapeHtml(v.name)}</p>
+                            <p class="text-xs text-slate-400">${escapeHtml(v.desc)}</p>
+                            <p class="text-xs text-slate-500 mt-1">${escapeHtml(v.id)}</p>
+                        </div>
+                        <div class="flex gap-2">
+                            <button onclick="event.stopPropagation(); playSample('${v.id}')" class="bg-sky-700 hover:bg-sky-600 text-white text-sm py-2 px-3 rounded-lg transition">▶ Écouter</button>
+                            ${v.id === currentVoice ? '<span class="text-green-400 text-sm">✓ Active</span>' : ''}
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        async function selectVoice(voiceId) {
+            try {
+                await fetch(`${API}/voice`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ voice_id: voiceId }) });
+                currentVoice = voiceId;
+                renderVoices();
+                showToast('Voix mise à jour', 'success');
+            } catch (err) { showToast(err.message, 'error'); }
+        }
+
+        function playSample(voiceId) {
+            const audio = document.getElementById('audio-player');
+            audio.src = `${API}/voice-sample/${voiceId}`;
+            audio.play();
+        }
+
+        // --- AdventureLog integration ---
+
+        let adventurelogNames = null;  // cached set of existing location names
+
+        async function loadAdventureLogNames() {
+            if (adventurelogNames !== null) return;
+            try {
+                const res = await fetch(`${API}/adventurelog/locations`);
+                if (res.ok) {
+                    const data = await res.json();
+                    adventurelogNames = new Set(data.names || []);
+                }
+            } catch (err) {
+                console.error('AdventureLog load error:', err);
+                adventurelogNames = new Set();
+            }
+        }
+
+        async function addToAdventureLogFromBtn(btn) {
+            const propId = btn.getAttribute('data-prop-id');
+            const activityIndex = parseInt(btn.getAttribute('data-act-idx'), 10);
+            const activityName = btn.getAttribute('data-act-name');
+            if (!propId || isNaN(activityIndex) || !activityName) return;
+            await addToAdventureLog(propId, activityIndex, activityName);
+        }
+
+        async function addToAdventureLog(propId, activityIndex, activityName) {
+            const btn = document.getElementById(`al-btn-${propId}-${activityIndex}`);
+            if (!btn) return;
+
+            // Skip if already added
+            if (btn.classList.contains('al-btn-added') || btn.classList.contains('al-btn-loading')) return;
+
+            // Set loading state
+            btn.className = 'al-btn al-btn-loading';
+            btn.textContent = '⏳ Ajout...';
+
+            try {
+                const res = await fetch(`${API}/adventurelog/location`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        name: activityName,
+                        location: activityName,
+                        is_public: false,
+                    })
+                });
+
+                if (res.ok) {
+                    // Success - mark as added
+                    btn.className = 'al-btn al-btn-added';
+                    btn.textContent = '✓ Ajouté à AdventureLog';
+                    // Add to cache
+                    if (adventurelogNames) adventurelogNames.add(activityName);
+                    showToast(`"${activityName.substring(0, 40)}" ajouté à AdventureLog`, 'success');
+                } else {
+                    const errorData = await res.json().catch(() => ({}));
+                    const detail = errorData.detail || `HTTP ${res.status}`;
+                    // Check if it's a duplicate (already exists)
+                    if (detail.includes('already') || detail.includes('exists') || detail.includes('duplicate') || res.status === 400) {
+                        btn.className = 'al-btn al-btn-added';
+                        btn.textContent = '✓ Déjà dans AdventureLog';
+                        if (adventurelogNames) adventurelogNames.add(activityName);
+                    } else {
+                        btn.className = 'al-btn al-btn-error';
+                        btn.textContent = '✕ Erreur';
+                        btn.title = detail;
+                        showToast(`Erreur AdventureLog: ${detail.substring(0, 100)}`, 'error');
+                        // Revert after 3s
+                        setTimeout(() => {
+                            btn.className = 'al-btn al-btn-default';
+                            btn.textContent = '📍 Ajouter à AdventureLog';
+                        }, 3000);
+                    }
+                }
+            } catch (err) {
+                btn.className = 'al-btn al-btn-error';
+                btn.textContent = '✕ Erreur réseau';
+                btn.title = err.message;
+                showToast(`Erreur: ${err.message}`, 'error');
+                setTimeout(() => {
+                    btn.className = 'al-btn al-btn-default';
+                    btn.textContent = '📍 Ajouter à AdventureLog';
+                }, 3000);
+            }
+        }
+
+        function checkAdventureLogStatus(propId, activityIndex, activityName) {
+            const btn = document.getElementById(`al-btn-${propId}-${activityIndex}`);
+            if (!btn) return;
+            if (adventurelogNames && adventurelogNames.has(activityName)) {
+                btn.className = 'al-btn al-btn-added';
+                btn.textContent = '✓ Déjà dans AdventureLog';
+            }
+        }
+
+        // --- Auto-refresh status ---
+        setInterval(() => {
+            if (currentPage === 'home') loadStatus();
+        }, 30000);
+
+        // --- Init ---
+        loadStatus();
+    </script>
+    <!-- Map module for Travely propositions -->
+    <script src="/static/map.js"></script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg-info/
+dist/
+build/
+
+# Environment / secrets
+.env
+.env.*
+*.pem
+*.key
+*.crt
+*.p12
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Cache / runtime
+.cache/
+*.log
+*.pid
+
+# Backup files (local dev artifacts)
+*.bak
+*.bak-*
+backup-*/
+
+# TTS audio cache
+static/tts-samples/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/

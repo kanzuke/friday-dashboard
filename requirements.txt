@@ -1,0 +1,5 @@
+fastapi
+uvicorn[standard]
+edge-tts
+# faster-whisper  # installé dans le venv Hermes, pas requis séparément
+# hermes-agent    # fourni par l'installation Hermes
