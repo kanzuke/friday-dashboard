@@ -228,17 +228,28 @@ friday-dashboard/
 
 ## Workflow de développement
 
-Après chaque modification du code :
+Après chaque modification du code, exécuter `./git_push.sh` depuis la racine
+du dépôt. Le script génère automatiquement un message de commit horodaté,
+commit et pousse sur `origin/main` :
 
 ```bash
-cd /opt/hermes-dashboard
-./git_push.sh "Description du changement"
+./git_push.sh
+# → 'Auto-commit: 2025-01-15 14:30:00'
+
+# Optionnel : ajouter une description au message
+./git_push.sh "fix: correction du bug carte"
+# → 'Auto-commit: 2025-01-15 14:30:00 — fix: correction du bug carte'
 ```
 
 Ce script effectue automatiquement :
-1. `git add -A`
-2. `git commit -m "<message>"`
-3. `git push origin main`
+1. `git add -A` (respecte `.gitignore`)
+2. Génère un message avec timestamp (`Auto-commit: YYYY-MM-DD HH:MM:SS`)
+3. `git commit -m "<message>"`
+4. `git push origin main`
+
+> **Note :** les credentials GitHub (token PAT avec scope `repo` ou clé SSH)
+> doivent être configurés au préalable (voir section
+> « Credentials GitHub pour le push » ci-dessus).
 
 ## Licence
 
