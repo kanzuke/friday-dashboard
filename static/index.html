@@ -1596,28 +1596,32 @@
             // Skip if already added
             if (btn.classList.contains('al-btn-added') || btn.classList.contains('al-btn-loading')) return;
 
-            // Set loading state
+            // Set loading state (geocoding + AdventureLog POST may take a few seconds)
             btn.className = 'al-btn al-btn-loading';
-            btn.textContent = '⏳ Ajout...';
+            btn.textContent = '⏳ Géoloc + ajout...';
 
             try {
-                const res = await fetch(`${API}/adventurelog/location`, {
+                // Use the new endpoint that handles place name extraction + geocoding
+                const res = await fetch(`${API}/adventurelog/add`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        name: activityName,
-                        location: activityName,
-                        is_public: false,
+                        prop_id: propId,
+                        activity_index: activityIndex,
+                        activity_name: activityName,
                     })
                 });
 
                 if (res.ok) {
                     // Success - mark as added
+                    const data = await res.json().catch(() => ({}));
+                    const placeName = data.place_name || activityName;
+                    const geocoded = data.geocoded;
                     btn.className = 'al-btn al-btn-added';
-                    btn.textContent = '✓ Ajouté à AdventureLog';
-                    // Add to cache
-                    if (adventurelogNames) adventurelogNames.add(activityName);
-                    showToast(`"${activityName.substring(0, 40)}" ajouté à AdventureLog`, 'success');
+                    btn.textContent = geocoded ? '✓ Ajouté + géolocalisé' : '✓ Ajouté à AdventureLog';
+                    // Cache the cleaned place name for duplicate detection
+                    if (adventurelogNames) adventurelogNames.add(placeName);
+                    showToast(`"${placeName.substring(0, 40)}" ajouté à AdventureLog${geocoded ? ' (géolocalisé)' : ''}`, 'success');
                 } else {
                     const errorData = await res.json().catch(() => ({}));
                     const detail = errorData.detail || `HTTP ${res.status}`;
