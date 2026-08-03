@@ -1,0 +1,14 @@
+[Unit]
+Description=Hermes Dashboard JSON-to-SQLite Sync Watcher
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hermes-dashboard
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python3 sync_json_to_sqlite.py --watch
+Restart=on-failure
+RestartSec=10
+Environment=HOME=/root
+
+[Install]
+WantedBy=multi-user.target
