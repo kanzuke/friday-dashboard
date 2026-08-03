@@ -37,6 +37,9 @@ from pydantic import BaseModel
 # --- Geocoding helpers (Nominatim with fallbacks) ---
 from geocode_helpers import init_cache_dir, geocode_with_fallbacks
 
+# --- SQLite database layer ---
+import db as dashboard_db
+
 # --- Configuration ---
 # Force HERMES_HOME to /root/.hermes regardless of profile context
 _HERMES_HOME_CANDIDATES = [
@@ -209,6 +212,16 @@ def ensure_dirs():
     CACHE_DIR.mkdir(parents=True, exist_ok=True)
     ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
     LOCKS_DIR.mkdir(parents=True, exist_ok=True)
+    # Sync JSON files to SQLite at startup (non-blocking, runs in background)
+    try:
+        import subprocess as _sp
+        _sp.Popen(
+            ["python3", str(APP_DIR / "sync_json_to_sqlite.py")],
+            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            env={**os.environ, "HOME": "/root"},
+        )
+    except Exception as e:
+        print(f"[DASHBOARD] Initial sync failed: {e}")
 
 
 # --- Travely propositions (reused from existing dashboard) ---
@@ -551,33 +564,27 @@ def normalize_proposition(data: dict, file_id: str) -> dict:
 
 
 def load_propositions() -> list[dict]:
-    """Load all propositions from JSON files, sorted by date descending.
+    """Load all propositions from SQLite, sorted by date descending.
 
-    Normalizes propositions that use a different schema (e.g., Londres)
-    into the flat schema expected by the dashboard.
-
-    Computes a 'statut' field for each proposition based on feedback:
-    - en_cours: no action yet (default)
-    - validee: action 'valider'
-    - refusee: action 'refuser'
-    - reorientee: action 'reorienter' and not yet processed by Travely
-    - en_revision: Travely is currently processing the reorientation
-    - archivee: proposition has been replaced by a newer version
+    Reads from the dashboard SQLite database (synced from JSON files by
+    sync_json_to_sqlite.py). Normalizes raw JSON to the flat schema the
+    dashboard expects. Computes 'statut' from feedback.
     """
-    ensure_dirs()
     props = []
-    for fpath in sorted(glob.glob(str(PROPOSITIONS_DIR / "*.json"))):
-        try:
-            with open(fpath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                file_id = Path(fpath).stem
-                if "id" not in data:
-                    data["id"] = file_id
-                # Normalize schema if needed (e.g., Londres nested format)
-                data = normalize_proposition(data, file_id)
-                props.append(data)
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"[WARN] Could not load {fpath}: {e}")
+    raw_props = dashboard_db.get_all_propositions()
+    for rp in raw_props:
+        prop_id = rp["id"]
+        # Load raw JSON and normalize
+        raw_json = dashboard_db.get_proposition_by_id(prop_id, raw=True)
+        if raw_json:
+            normalized = normalize_proposition(raw_json, prop_id)
+            # Override with DB-stored fields if available
+            if rp.get("date"):
+                normalized["date"] = rp["date"]
+            props.append(normalized)
+        else:
+            # Fallback to the DB fields if raw JSON is missing
+            props.append(rp)
     props.sort(key=lambda p: p.get("date", ""), reverse=True)
     return props
 
@@ -612,70 +619,45 @@ def compute_statut(prop_id: str, feedback: dict) -> str:
 
 
 def load_archived_propositions() -> list[dict]:
-    """Load archived propositions (replaced by newer versions)."""
-    ensure_dirs()
+    """Load archived propositions from SQLite (statut=archivee)."""
     props = []
-    for fpath in sorted(glob.glob(str(ARCHIVE_DIR / "*.json"))):
-        try:
-            with open(fpath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                file_id = Path(fpath).stem
-                if "id" not in data:
-                    data["id"] = file_id
-                data = normalize_proposition(data, file_id)
-                data["statut"] = "archivee"
-                props.append(data)
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"[WARN] Could not load archived {fpath}: {e}")
+    all_props = dashboard_db.get_all_propositions()
+    for rp in all_props:
+        if rp.get("statut") == "archivee":
+            raw_json = dashboard_db.get_proposition_by_id(rp["id"], raw=True)
+            if raw_json:
+                normalized = normalize_proposition(raw_json, rp["id"])
+                normalized["statut"] = "archivee"
+                props.append(normalized)
+            else:
+                rp["statut"] = "archivee"
+                props.append(rp)
     props.sort(key=lambda p: p.get("date", ""), reverse=True)
     return props
 
 
 def load_feedback() -> dict:
-    """Load all feedback (comments + actions) keyed by proposition_id."""
-    ensure_dirs()
-    feedback = {}
-    for fpath in sorted(glob.glob(str(FEEDBACK_DIR / "*.json"))):
-        try:
-            with open(fpath, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                fb = feedback.setdefault(
-                    data["proposition_id"],
-                    {
-                        "comments": [],
-                        "action": None,
-                        "action_detail": None,
-                        "action_date": None,
-                    },
-                )
-                if data.get("type") == "comment":
-                    fb["comments"].append(data)
-                elif data.get("type") == "action":
-                    fb["action"] = data.get("action")
-                    fb["action_detail"] = data.get("reorientation") or data.get("refus_raison")
-                    fb["action_date"] = data.get("date")
-        except (json.JSONDecodeError, IOError, KeyError) as e:
-            print(f"[WARN] Could not load feedback {fpath}: {e}")
-    return feedback
+    """Load all feedback (comments + actions) from SQLite, keyed by proposition_id."""
+    return dashboard_db.get_all_feedback()
 
 
 def save_feedback_entry(entry: dict) -> str:
-    """Save a feedback entry to a JSON file, returns the file id."""
-    ensure_dirs()
-    entry_id = str(uuid.uuid4())[:8]
-    entry["feedback_id"] = entry_id
-    entry["date"] = datetime.now(timezone.utc).isoformat()
-    fpath = FEEDBACK_DIR / f"{entry_id}.json"
-    with open(fpath, "w", encoding="utf-8") as f:
-        json.dump(entry, f, ensure_ascii=False, indent=2)
+    """Save a feedback entry to both SQLite and a JSON file (for Travely), returns the file id."""
+    entry_id = dashboard_db.insert_feedback_direct(
+        prop_id=entry.get("proposition_id", ""),
+        fb_type=entry.get("type", "comment"),
+        action=entry.get("action"),
+        text=entry.get("text"),
+        author=entry.get("author", "mathieu"),
+        reorientation=entry.get("reorientation"),
+        refus_raison=entry.get("refus_raison"),
+    )
     return entry_id
 
 
 def delete_feedback_file(feedback_id: str):
-    """Delete a feedback file by its id."""
-    fpath = FEEDBACK_DIR / f"{feedback_id}.json"
-    if fpath.exists():
-        fpath.unlink()
+    """Delete a feedback entry from both SQLite and the JSON file."""
+    dashboard_db.delete_feedback(feedback_id)
 
 
 # --- Travely reorientation trigger ---
@@ -1502,15 +1484,15 @@ async def api_enrich(query: EnrichQuery, _=Depends(check_auth)):
 
 @app.get("/api/proposition/{prop_id}/map")
 async def api_proposition_map(prop_id: str, _=Depends(check_auth)):
-    """Return geocoded map data for a proposition.
+    """Return map data for a proposition, using cached coordinates from SQLite.
 
-    Returns a list of points with lat/lon coordinates, labels, types, and
-    metadata for popups. The frontend uses this to render a Leaflet map with
-    numbered markers, polylines, and colored icons.
+    Coordinates are geocoded once (via Nominatim) and stored permanently in the
+    programme_items table. On subsequent calls, the cached coordinates are read
+    directly from SQLite — no Nominatim calls.
 
-    Geocoding is done server-side via Nominatim (OpenStreetMap, free) with
-    disk caching to avoid repeated calls. Rate-limited to 1 req/sec per
-    Nominatim usage policy.
+    Only points that have never been geocoded (latitude IS NULL) will trigger
+    a Nominatim call. This respects Nominatim usage policy and makes map
+    loading instant for already-geocoded propositions.
     """
     prop = _load_proposition_by_id(prop_id, raw=True)
     if prop is None:
@@ -1521,41 +1503,117 @@ async def api_proposition_map(prop_id: str, _=Depends(check_auth)):
     if not points:
         return {"proposition_id": prop_id, "destination": display_dest, "points": [], "geocoded": 0, "failed": 0}
 
-    # Geocode each point in a background thread (to not block the event loop)
-    # Nominatim rate limit means this can take a few seconds for many points.
-    loop = asyncio.get_event_loop()
+    # Check which points already have cached coordinates in programme_items
+    cached_items = dashboard_db.get_programme_items(prop_id)
+    # Build a lookup by activity_index (for programme-based schemas) or by address hash
+    # Items with latitude IS NULL have never been geocoded → need geocoding
+    # Items with latitude=0, lon=0 were tried and failed → skip (don't retry)
+    # Items with real lat/lon are cached → use directly
+    cached_by_index = {}
+    failed_indices = set()
+    for item in cached_items:
+        idx = item["activity_index"]
+        lat = item.get("latitude")
+        lon = item.get("longitude")
+        if lat is not None and lon is not None and lat != 0 and lon != 0:
+            cached_by_index[idx] = item
+        elif lat is not None and lon is not None and lat == 0 and lon == 0:
+            failed_indices.add(idx)
 
-    def geocode_all():
-        results = []
-        for p in points:
-            # For activity points (index > 0), skip destination fallback
-            # to avoid placing all activities at the destination's coordinates
-            skip_dest = p["index"] > 0
-            geo = geocode_with_fallbacks(p["address"], skip_destination_fallback=skip_dest)
-            if geo:
-                results.append({
-                    "index": p["index"],
-                    "label": p["label"],
-                    "type": p["type"],
-                    "heure": p.get("heure", ""),
-                    "cout": p.get("cout", ""),
-                    "description": p.get("description", ""),
-                    "lat": geo["lat"],
-                    "lon": geo["lon"],
-                    "display_name": geo["display_name"],
-                    "address": p["address"],
-                })
-        return results
+    # Separate points into: already cached (instant) and needing geocoding (Nominatim)
+    instant_results = []
+    to_geocode = []
+    for p in points:
+        idx = p["index"]
+        if idx in cached_by_index:
+            cached = cached_by_index[idx]
+            instant_results.append({
+                "index": idx,
+                "label": p["label"],
+                "type": p["type"],
+                "heure": p.get("heure", ""),
+                "cout": p.get("cout", ""),
+                "description": p.get("description", ""),
+                "lat": cached["latitude"],
+                "lon": cached["longitude"],
+                "display_name": cached.get("display_name", "") or p["address"],
+                "address": p["address"],
+            })
+        elif idx in failed_indices:
+            # Already tried and failed — skip (don't retry Nominatim)
+            pass
+        else:
+            to_geocode.append(p)
 
-    geocoded = await loop.run_in_executor(None, geocode_all)
+    # Geocode missing points in a background thread (Nominatim, rate-limited)
+    newly_geocoded = []
+    if to_geocode:
+        loop = asyncio.get_event_loop()
+
+        def geocode_missing():
+            results = []
+            for p in to_geocode:
+                skip_dest = p["index"] > 0
+                geo = geocode_with_fallbacks(p["address"], skip_destination_fallback=skip_dest)
+                if geo:
+                    results.append({
+                        "index": p["index"],
+                        "label": p["label"],
+                        "type": p["type"],
+                        "heure": p.get("heure", ""),
+                        "cout": p.get("cout", ""),
+                        "description": p.get("description", ""),
+                        "lat": geo["lat"],
+                        "lon": geo["lon"],
+                        "display_name": geo["display_name"],
+                        "address": p["address"],
+                    })
+                else:
+                    # Mark as failed (lat=0, lon=0) so we don't retry Nominatim every time
+                    _cache_map_point_failed(prop_id, p)
+            return results
+
+        newly_geocoded = await loop.run_in_executor(None, geocode_missing)
+
+        # Persist the newly geocoded coordinates in programme_items (geocode once, forever)
+        for geo_point in newly_geocoded:
+            _cache_map_point_coords(prop_id, geo_point)
+
+    all_results = instant_results + newly_geocoded
+    # Sort by index to maintain consistent ordering
+    all_results.sort(key=lambda r: r["index"])
 
     return {
         "proposition_id": prop_id,
         "destination": display_dest,
-        "points": geocoded,
-        "geocoded": len(geocoded),
-        "failed": len(points) - len(geocoded),
+        "points": all_results,
+        "geocoded": len(all_results),
+        "failed": len(points) - len(all_results),
     }
+
+
+def _cache_map_point_failed(prop_id: str, point: dict):
+    """Mark a map point as failed geocoding (lat=0, lon=0) to avoid retrying."""
+    conn = dashboard_db.get_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id FROM programme_items WHERE proposition_id = ? AND activity_index = ?
+    """, (prop_id, point["index"]))
+    row = cur.fetchone()
+    if row:
+        cur.execute("""
+            UPDATE programme_items SET latitude = 0, longitude = 0, geocoded_at = ?
+            WHERE id = ?
+        """, (time.time(), row["id"]))
+    else:
+        cur.execute("""
+            INSERT INTO programme_items (proposition_id, activity_index, activite, type,
+                                          latitude, longitude, geocoded_at)
+            VALUES (?, ?, ?, ?, 0, 0, ?)
+        """, (prop_id, point["index"], point.get("label", ""),
+              point.get("type", "default"), time.time()))
+    conn.commit()
+    conn.close()
 
 
 # --- Routes: Listings cache helpers ---
@@ -1775,7 +1833,7 @@ def _extract_map_points(prop: dict) -> list[dict]:
             return points
 
     # Schema 2: flat "activites" as strings OR day objects
-    destination = prop.get("destination", "") or _get_display_destination(prop)
+    destination = _get_display_destination(prop) or str(prop.get("destination", "") or "")
     activites = prop.get("activites", [])
     if not isinstance(activites, list):
         activites = []
@@ -1844,31 +1902,12 @@ def _infer_activity_type(activity: str) -> str:
 
 
 def _load_proposition_by_id(prop_id: str, raw: bool = False) -> Optional[dict]:
-    """Load a single proposition by its ID from the propositions dir or archive.
+    """Load a single proposition by its ID from SQLite.
 
     If raw=True, return the raw JSON without normalization (preserves 'programme'
-    field needed for map point extraction).
+    field needed for map point extraction and AdventureLog place extraction).
     """
-    # Try active propositions
-    prop_file = PROPOSITIONS_DIR / f"{prop_id}.json"
-    if not prop_file.exists():
-        # Try archive (search by pattern prop_id*.json)
-        for fpath in glob.glob(str(ARCHIVE_DIR / f"{prop_id}*.json")):
-            prop_file = Path(fpath)
-            break
-    if not prop_file.exists():
-        return None
-    try:
-        with open(prop_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if "id" not in data:
-            data["id"] = prop_file.stem
-        if not raw:
-            data = normalize_proposition(data, prop_file.stem)
-        return data
-    except (json.JSONDecodeError, IOError) as e:
-        print(f"[MAP] Could not load proposition {prop_id}: {e}")
-        return None
+    return dashboard_db.get_proposition_by_id(prop_id, raw=raw)
 
 
 def _get_display_destination(prop: dict) -> str:
@@ -1876,12 +1915,20 @@ def _get_display_destination(prop: dict) -> str:
 
     Tries multiple field names across the various proposition schemas:
     - Flat schema: prop['destination']
+    - Dict schema (Maroc): prop['destination'] as {"ville_principale": "...", "pays": "..."}
     - Santa Monica metadata: metadata['ville']
     - Norge metadata: metadata['destination_principale'] + metadata['pays']
     - Londres metadata: metadata['ville_principale'] + metadata['pays']
     """
-    if prop.get("destination"):
-        return prop["destination"]
+    dest = prop.get("destination")
+    if dest:
+        if isinstance(dest, dict):
+            ville = dest.get("ville_principale", "") or dest.get("ville", "")
+            pays = dest.get("pays", "")
+            if ville and pays:
+                return f"{ville}, {pays}"
+            return ville or pays or ""
+        return str(dest)
     meta = prop.get("metadata", {})
     if meta:
         ville = (meta.get("ville_principale", "") or
@@ -1898,18 +1945,62 @@ def _get_display_destination(prop: dict) -> str:
     return ""
 
 
+def _cache_map_point_coords(prop_id: str, geo_point: dict):
+    """Persist geocoded coordinates for a map point in programme_items.
+
+    Called after Nominatim geocoding to cache the result permanently.
+    If the programme_item row doesn't exist yet (e.g. for flat-schema propositions
+    where activities are stored as strings), create one.
+    """
+    conn = dashboard_db.get_conn()
+    cur = conn.cursor()
+    # Try to find an existing programme_item with this index
+    cur.execute("""
+        SELECT id FROM programme_items WHERE proposition_id = ? AND activity_index = ?
+    """, (prop_id, geo_point["index"]))
+    row = cur.fetchone()
+    if row:
+        cur.execute("""
+            UPDATE programme_items SET latitude = ?, longitude = ?, display_name = ?,
+                                       geocoded_at = ?
+            WHERE id = ?
+        """, (geo_point["lat"], geo_point["lon"], geo_point.get("display_name", ""),
+              time.time(), row["id"]))
+    else:
+        # Create a new programme_item row for this point
+        cur.execute("""
+            INSERT INTO programme_items (proposition_id, activity_index, activite, type,
+                                          latitude, longitude, display_name, geocoded_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """, (prop_id, geo_point["index"], geo_point.get("label", ""),
+              geo_point.get("type", "default"), geo_point["lat"], geo_point["lon"],
+              geo_point.get("display_name", ""), time.time()))
+    conn.commit()
+    conn.close()
+
+
 # --- Routes: Listings cache helpers ---
 
 
 def load_listings_cache(cache_file: str) -> Optional[dict]:
-    """Load listings from local JSON cache file. Returns None if not found."""
-    fpath = LISTINGS_CACHE_DIR / cache_file
-    if fpath.exists():
-        try:
-            with open(fpath, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
-            print(f"[WARN] Could not load cache {fpath}: {e}")
+    """Load listings from SQLite. Returns None if not found.
+
+    cache_file is 'findy_listings.json' or 'spoty_listings.json' (kept for API compat).
+    """
+    if "findy" in cache_file:
+        listings = dashboard_db.get_findy_listings()
+        if listings:
+            info = dashboard_db.get_findy_cache_info()
+            return {"annonces": listings, "count": len(listings),
+                    "fetched_at": info.get("cached_at")}
+        return None
+    elif "spoty" in cache_file:
+        listings = dashboard_db.get_spoty_listings()
+        if listings:
+            info = dashboard_db.get_spoty_cache_info()
+            return {"annonces": listings, "count": len(listings),
+                    "fetched_at": info.get("cached_at")}
+        return None
     return None
 
 
@@ -2070,47 +2161,18 @@ class ChatHistoryEntry(BaseModel):
 
 
 def load_chat_history() -> list[dict]:
-    """Load chat history from JSON file, filtered to last 7 days."""
-    if not CHAT_HISTORY_FILE.exists():
-        return []
-    try:
-        with open(CHAT_HISTORY_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        if not isinstance(data, list):
-            return []
-        # Filter to last 7 days
-        cutoff = time.time() - (CHAT_HISTORY_MAX_DAYS * 86400)
-        recent = [m for m in data if m.get("timestamp", 0) and
-                  isinstance(m["timestamp"], (int, float)) and m["timestamp"] >= cutoff]
-        # If we filtered some out, save the trimmed version
-        if len(recent) < len(data):
-            save_chat_history(recent)
-        return recent
-    except (json.JSONDecodeError, IOError):
-        return []
+    """Load chat history from SQLite, filtered to last 7 days."""
+    return dashboard_db.load_chat_history(max_days=CHAT_HISTORY_MAX_DAYS)
 
 
 def save_chat_history(messages: list[dict]):
-    """Save chat history to JSON file."""
-    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
-    with open(CHAT_HISTORY_FILE, "w", encoding="utf-8") as f:
-        json.dump(messages, f, ensure_ascii=False, indent=2)
+    """Save chat history — no-op for SQLite (messages are appended individually)."""
+    pass  # SQLite handles persistence via append_chat_message()
 
 
 def append_chat_message(role: str, content: str, msg_type: str = "text"):
-    """Append a single message to chat history."""
-    messages = load_chat_history()
-    entry = {
-        "timestamp": time.time(),
-        "role": role,
-        "content": content[:5000],  # cap message length
-        "type": msg_type,
-    }
-    messages.append(entry)
-    # Keep only last 7 days
-    cutoff = time.time() - (CHAT_HISTORY_MAX_DAYS * 86400)
-    messages = [m for m in messages if m.get("timestamp", 0) >= cutoff]
-    save_chat_history(messages)
+    """Append a single message to chat history (SQLite)."""
+    dashboard_db.append_chat_message(role, content, msg_type)
 
 
 @app.get("/api/chat/history")
@@ -2122,8 +2184,7 @@ async def api_chat_history(_=Depends(check_auth)):
 @app.delete("/api/chat/history")
 async def api_clear_chat_history(_=Depends(check_auth)):
     """Clear all chat history."""
-    if CHAT_HISTORY_FILE.exists():
-        CHAT_HISTORY_FILE.unlink()
+    dashboard_db.clear_chat_history()
     return {"status": "ok"}
 
 
@@ -2760,6 +2821,20 @@ async def api_add_adventurelog_from_proposition(req: AdventureLogAddRequest, _=D
     try:
         with urllib.request.urlopen(req_to_al, timeout=15) as resp:
             response_data = json.loads(resp.read().decode("utf-8"))
+            # Store the geocoded location in SQLite for future reference
+            al_uuid = None
+            if isinstance(response_data, dict):
+                al_uuid = response_data.get("id") or response_data.get("uuid")
+            lat_float = float(latitude) if latitude else None
+            lon_float = float(longitude) if longitude else None
+            dashboard_db.add_adventurelog_location(
+                proposition_id=req.prop_id,
+                programme_item_id=None,
+                adventurelog_uuid=str(al_uuid) if al_uuid else "",
+                name=place_name,
+                lat=lat_float,
+                lon=lon_float,
+            )
             return {
                 "status": "ok",
                 "location": response_data,
