@@ -1906,8 +1906,14 @@ def _load_proposition_by_id(prop_id: str, raw: bool = False) -> Optional[dict]:
 
     If raw=True, return the raw JSON without normalization (preserves 'programme'
     field needed for map point extraction and AdventureLog place extraction).
+    If raw=False, return the normalized flat schema (calls normalize_proposition).
     """
-    return dashboard_db.get_proposition_by_id(prop_id, raw=raw)
+    raw_data = dashboard_db.get_proposition_by_id(prop_id, raw=True)
+    if raw_data is None:
+        return None
+    if raw:
+        return raw_data
+    return normalize_proposition(raw_data, prop_id)
 
 
 def _get_display_destination(prop: dict) -> str:
